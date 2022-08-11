@@ -1,0 +1,17 @@
+[
+    {
+        "fileHash": "sha256-67a8eca9c06f8758131c843a9f396e6e4682f97f311e71ec08551722a793b65c",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/tunglam0711/TestPlugins",
+        "fileSize": 25266,
+        "status": 3,
+        "authors": [
+            "T\u00ean c\u1ee7a b\u1ea1n"
+        ],
+        "version": 1,
+        "internalName": "Vn2cProvider",
+        "description": "Plugin xem phim tr\u00ean Vn2c.my",
+        "url": "https://raw.githubusercontent.com/tunglam0711/TestPlugins/builds/Vn2cProvider.cs3",
+        "name": "Vn2cProvider"
+    }
+]
