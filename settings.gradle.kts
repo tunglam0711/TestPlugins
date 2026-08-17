@@ -1,3 +1,6 @@
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "0.10.0"
+}
 rootProject.name = "CloudstreamPlugins"
 
 // This file sets what projects are included.
