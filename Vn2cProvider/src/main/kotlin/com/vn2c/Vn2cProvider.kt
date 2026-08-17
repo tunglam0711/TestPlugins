@@ -45,7 +45,7 @@ class Vn2cProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/tim-kiem/$query"
+        val url = "$mainUrl/tim-kiem/$query.html"
         val document = app.get(url).document
         return document.select(ITEM_SELECTOR).mapNotNull { it.toSearchResult() }
     }
@@ -111,63 +111,48 @@ class Vn2cProvider : MainAPI() {
         // 1. Quét iframe nhúng
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
-            if (src.startsWith("//")) src = "https:$src" // Sửa lỗi thiếu giao thức
+            if (src.startsWith("//")) src = "https:$src"
 
             if (src.isNotBlank() && src.startsWith("http")) {
-                // Gọi bộ giải mã mặc định của Cloudstream
                 loadExtractor(src, mainUrl, subtitleCallback, callback)
 
-                // --- PHẦN THÊM MỚI: XỬ LÝ RIÊNG CHO IFRAME VN2DATA (JWPLAYER) ---
-                if (src.contains("vn2data") || src.contains("play.php")) {
+                // XỬ LÝ IFRAME VN2DATA & PLAY.PHP
+                if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn")) {
                     val iframeText = app.get(src, referer = data).text
 
-                    val jwFileRegex = Regex("""file\s*:\s*['"](http[^'"]+)['"]""")
+                    // Cào biến javascript link_video_sd và link_video_hd
+                    val vn2VarRegex = Regex("""var\s+link_video_(?:sd|hd)\s*=\s*["'](http[^"']+)["']""")
 
-                    jwFileRegex.findAll(iframeText).forEach { match ->
+                    vn2VarRegex.findAll(iframeText).forEach { match ->
                         val videoLink = match.groupValues[1]
+
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
-                                name = "VN2Data Server",
+                                name = if (match.value.contains("_hd")) "VN2Data HD" else "VN2Data SD",
                                 url = videoLink
                             ) {
                                 this.referer = src
-                                this.quality = Qualities.Unknown.value
+                                this.quality = if (match.value.contains("_hd")) Qualities.P1080.value else Qualities.P720.value
                             }
                         )
+                        linkFound = true
                     }
                 }
-                // ----------------------------------------------------------------
-
-                linkFound = true
             }
         }
 
-        // 2. Quét thẻ script để tìm link M3u8 hoặc Mp4 ẩn ở trang ngoài
+        // 2. Quét thẻ script ở trang ngoài (Dự phòng)
         val scriptContent = document.select("script").joinToString("") { it.html() }
-        val m3u8Regex = Regex("(?<=file: '|\")(.*?\\.m3u8.*?)(?='|\")")
-        val mp4Regex = Regex("(?<=file: '|\")(.*?\\.mp4.*?)(?='|\")")
+        val sourceRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
 
-        m3u8Regex.find(scriptContent)?.let { match ->
+        sourceRegex.findAll(scriptContent).forEach { match ->
+            val link = match.groupValues[1]
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name = "Server 1",
-                    url = match.groupValues[1]
-                ) {
-                    this.referer = mainUrl
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-            linkFound = true
-        }
-
-        mp4Regex.find(scriptContent)?.let { match ->
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "Server 2",
-                    url = match.groupValues[1]
+                    name = if (link.contains(".m3u8")) "HLS Server" else "MP4 Server",
+                    url = link
                 ) {
                     this.referer = mainUrl
                     this.quality = Qualities.Unknown.value
