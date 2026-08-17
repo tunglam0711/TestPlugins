@@ -45,7 +45,10 @@ class Vn2cProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/tim-kiem/$query.html"
+        // Đổi khoảng trắng thành dấu gạch ngang (VD: "nam hi" -> "nam-hi")
+        val formattedQuery = query.trim().replace(" ", "-")
+        val url = "$mainUrl/tim-kiem/$formattedQuery"
+
         val document = app.get(url).document
         return document.select(ITEM_SELECTOR).mapNotNull { it.toSearchResult() }
     }
@@ -84,7 +87,6 @@ class Vn2cProvider : MainAPI() {
             }
         }
 
-        // Trường hợp phim lẻ (có nút XEM PHIM nhưng không có danh sách tập)
         if (episodes.isEmpty()) {
             val playBtn = document.selectFirst("div.playphim a")?.attr("href")
             if (playBtn != null) {
@@ -108,32 +110,53 @@ class Vn2cProvider : MainAPI() {
         val document = app.get(data).document
         var linkFound = false
 
-        // 1. Quét iframe nhúng
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
+            if (src.startsWith("/")) src = "$mainUrl$src"
 
             if (src.isNotBlank() && src.startsWith("http")) {
                 loadExtractor(src, mainUrl, subtitleCallback, callback)
 
-                // XỬ LÝ IFRAME VN2DATA & PLAY.PHP
                 if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn")) {
-                    val iframeText = app.get(src, referer = data).text
+                    // Truyền Header đánh lừa server vn2data
+                    val iframeResponse = app.get(
+                        src,
+                        headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                            "Accept-Language" to "vi-VN,vi;q=0.8,en-US;q=0.5,en;q=0.3",
+                            "Referer" to data
+                        )
+                    ).text
 
-                    // Cào biến javascript link_video_sd và link_video_hd
-                    val vn2VarRegex = Regex("""var\s+link_video_(?:sd|hd)\s*=\s*["'](http[^"']+)["']""")
-
-                    vn2VarRegex.findAll(iframeText).forEach { match ->
-                        val videoLink = match.groupValues[1]
-
+                    val sdRegex = Regex("""var\s+link_video_sd\s*=\s*["'](http[^"']+)["']""")
+                    sdRegex.findAll(iframeResponse).forEach { match ->
+                        val link = match.groupValues[1]
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
-                                name = if (match.value.contains("_hd")) "VN2Data HD" else "VN2Data SD",
-                                url = videoLink
+                                name = "VN2Data SD",
+                                url = link
                             ) {
                                 this.referer = src
-                                this.quality = if (match.value.contains("_hd")) Qualities.P1080.value else Qualities.P720.value
+                                this.quality = Qualities.P720.value
+                            }
+                        )
+                        linkFound = true
+                    }
+
+                    val hdRegex = Regex("""var\s+link_video_hd\s*=\s*["'](http[^"']+)["']""")
+                    hdRegex.findAll(iframeResponse).forEach { match ->
+                        val link = match.groupValues[1]
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "VN2Data HD",
+                                url = link
+                            ) {
+                                this.referer = src
+                                this.quality = Qualities.P1080.value
                             }
                         )
                         linkFound = true
@@ -142,11 +165,10 @@ class Vn2cProvider : MainAPI() {
             }
         }
 
-        // 2. Quét thẻ script ở trang ngoài (Dự phòng)
         val scriptContent = document.select("script").joinToString("") { it.html() }
-        val sourceRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
+        val fallbackRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
 
-        sourceRegex.findAll(scriptContent).forEach { match ->
+        fallbackRegex.findAll(scriptContent).forEach { match ->
             val link = match.groupValues[1]
             callback.invoke(
                 newExtractorLink(
