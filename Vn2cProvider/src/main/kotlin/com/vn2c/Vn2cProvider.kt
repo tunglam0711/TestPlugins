@@ -147,3 +147,51 @@ class Vn2cProvider : MainAPI() {
         return isFound
     }
 } // CHÚ Ý: Dấu ngoặc đóng class Vn2cProvider được đặt ở tận cùng file!
+
+// ==========================================
+    // 4. HÀM LẤY LINK VIDEO
+    // ==========================================
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        // 'data' chính là url của tập phim truyền từ hàm load
+        val response = app.get(data)
+        val htmlText = response.text // Lấy toàn bộ mã nguồn thô của trang
+
+        var isFound = false
+
+        // 1. Quét tìm tất cả link có đuôi .mp4 hoặc .m3u8
+        val regex = Regex("""(https?://[^"']+\.(?:mp4|m3u8)[^"']*)""")
+        val matches = regex.findAll(htmlText)
+
+        matches.forEach { matchResult ->
+            val link = matchResult.groupValues[1]
+            val isM3u8 = link.contains(".m3u8")
+
+            // Gửi link tìm được cho Cloudstream phát (Đã sửa ExtractorLink thành newExtractorLink)
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = link,
+                    referer = data, 
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = isM3u8
+                )
+            )
+            isFound = true
+        }
+
+        // 2. Dự phòng: Nếu regex không tìm thấy, có thể họ nhúng video qua thẻ iframe
+        if (!isFound) {
+            val iframeSrc = response.document.selectFirst("iframe")?.attr("src")
+            if (iframeSrc != null) {
+                println("Vn2c dùng Iframe: $iframeSrc")
+            }
+        }
+
+        return isFound
+    }
