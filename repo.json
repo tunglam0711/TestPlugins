@@ -3,6 +3,6 @@
   "description": "Kho Plugin Cloudstream tự làm",
   "manifestVersion": 1,
   "pluginLists": [
-    "https://raw.githubusercontent.com/tunglam0711/TestPlugins/builds/plugins.json"
+    "https://cdn.jsdelivr.net/gh/tunglam0711/TestPlugins@master/repo.json"
   ]
 }
