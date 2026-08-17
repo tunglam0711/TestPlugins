@@ -45,7 +45,6 @@ class Vn2cProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // Đổi khoảng trắng thành dấu gạch ngang (VD: "nam hi" -> "nam-hi")
         val formattedQuery = query.trim().replace(" ", "-")
         val url = "$mainUrl/tim-kiem/$formattedQuery"
 
@@ -106,74 +105,95 @@ class Vn2cProvider : MainAPI() {
         }
     }
 
+    // NÂNG CẤP BẮT LINK VÉT CẠN (BRUTE-FORCE) VÀ CHỐNG CRASH
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val document = app.get(data).document
         var linkFound = false
 
-        document.select("iframe").forEach { iframe ->
-            var src = iframe.attr("src")
+        // Tải trang xem phim (chỉ gọi app.get 1 lần để tối ưu)
+        val response = app.get(data)
+        val mainHtml = response.text
+        val document = response.document
+
+        // Tạo danh sách chứa TẤT CẢ iframe tìm thấy bằng cả 2 cách (DOM và Regex Text)
+        val iframes = mutableListOf<String>()
+
+        document.select("iframe").forEach { iframes.add(it.attr("src")) }
+
+        Regex("""<iframe[^>]+src=["']([^"']+)["']""").findAll(mainHtml).forEach {
+            iframes.add(it.groupValues[1])
+        }
+
+        // Lọc trùng và quét từng iframe
+        iframes.filter { it.isNotBlank() }.distinct().forEach { rawSrc ->
+            var src = rawSrc
             if (src.startsWith("//")) src = "https:$src"
             if (src.startsWith("/")) src = "$mainUrl$src"
 
-            if (src.isNotBlank() && src.startsWith("http")) {
+            if (src.startsWith("http")) {
                 loadExtractor(src, mainUrl, subtitleCallback, callback)
 
-                if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn")) {
-                    // Truyền Header đánh lừa server vn2data
-                    val iframeResponse = app.get(
-                        src,
-                        headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                            "Accept-Language" to "vi-VN,vi;q=0.8,en-US;q=0.5,en;q=0.3",
-                            "Referer" to data
-                        )
-                    ).text
+                if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn") || src.contains("phim.php")) {
+                    try {
+                        // Gọi iframe với Header giả lập
+                        val iframeHtml = app.get(
+                            src,
+                            headers = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+                                "Referer" to data,
+                                "Accept" to "*/*"
+                            )
+                        ).text
 
-                    val sdRegex = Regex("""var\s+link_video_sd\s*=\s*["'](http[^"']+)["']""")
-                    sdRegex.findAll(iframeResponse).forEach { match ->
-                        val link = match.groupValues[1]
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "VN2Data SD",
-                                url = link
-                            ) {
-                                this.referer = src
-                                this.quality = Qualities.P720.value
-                            }
-                        )
-                        linkFound = true
-                    }
+                        // Chiến thuật 1: Quét biến link_video_sd và link_video_hd
+                        val varRegex = Regex("""link_video_(?:sd|hd)\s*=\s*["'](http[^"']+)["']""")
+                        varRegex.findAll(iframeHtml).forEach { match ->
+                            val link = match.groupValues[1]
+                            val isHd = match.value.contains("_hd")
 
-                    val hdRegex = Regex("""var\s+link_video_hd\s*=\s*["'](http[^"']+)["']""")
-                    hdRegex.findAll(iframeResponse).forEach { match ->
-                        val link = match.groupValues[1]
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "VN2Data HD",
-                                url = link
-                            ) {
-                                this.referer = src
-                                this.quality = Qualities.P1080.value
-                            }
-                        )
-                        linkFound = true
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = if (isHd) "Server HD" else "Server SD",
+                                    url = link
+                                ) {
+                                    this.referer = src
+                                    this.quality = if (isHd) Qualities.P1080.value else Qualities.P720.value
+                                }
+                            )
+                            linkFound = true
+                        }
+
+                        // Chiến thuật 2: Quét link MP4 / M3U8 trực tiếp bị ẩn
+                        val directRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
+                        directRegex.findAll(iframeHtml).forEach { match ->
+                            val link = match.groupValues[1]
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = if (link.contains(".m3u8")) "HLS Server" else "MP4 Server",
+                                    url = link
+                                ) {
+                                    this.referer = src
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                            linkFound = true
+                        }
+                    } catch (e: Exception) {
+                        // Bỏ qua lỗi ngầm để tiếp tục quét iframe khác
                     }
                 }
             }
         }
 
-        val scriptContent = document.select("script").joinToString("") { it.html() }
-        val fallbackRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
-
-        fallbackRegex.findAll(scriptContent).forEach { match ->
+        // Chiến thuật 3: Dự phòng trường hợp web vứt link video ra ngoài mainHtml
+        val backupRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
+        backupRegex.findAll(mainHtml).forEach { match ->
             val link = match.groupValues[1]
             callback.invoke(
                 newExtractorLink(
-                    source = name,
-                    name = if (link.contains(".m3u8")) "HLS Server" else "MP4 Server",
+                    source = this.name,
+                    name = "Backup Server",
                     url = link
                 ) {
                     this.referer = mainUrl
