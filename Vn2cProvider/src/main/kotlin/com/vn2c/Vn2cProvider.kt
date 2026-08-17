@@ -17,18 +17,12 @@ class Vn2cProvider : MainAPI() {
         TvType.AsianDrama
     )
 
-    // =========================================================================
-    // --- CẤU HÌNH CSS SELECTORS ---
-    // =========================================================================
-
     private val ITEM_SELECTOR = "div.Form2"
     private val LINK_SELECTOR = "a"
     private val POSTER_SELECTOR = "img.c10"
 
     private val EPISODES_SELECTOR = "div.num_film a"
     private val DESCRIPTION_SELECTOR = "div.wiew_info p"
-
-    // =========================================================================
 
     override val mainPage = mainPageOf(
         "$mainUrl/phim-moi-vn2-phim-2vn-phim/new" to "Phim Mới",
@@ -105,9 +99,6 @@ class Vn2cProvider : MainAPI() {
         }
     }
 
-    // =========================================================================
-    // BẬT CHẾ ĐỘ DEBUG: IN LỖI TRỰC TIẾP RA MÀN HÌNH CHỌN SERVER
-    // =========================================================================
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         var linkFound = false
         val document = app.get(data).document
@@ -115,67 +106,63 @@ class Vn2cProvider : MainAPI() {
         val iframes = mutableListOf<String>()
         document.select("iframe").forEach { iframes.add(it.attr("src")) }
 
-        // --- DEBUG 1: TÌM IFRAME ---
-        if (iframes.isEmpty()) {
-            callback.invoke(newExtractorLink(source = name, name = "LỖI 1: Không tìm thấy iframe nào trên trang", url = data) { this.quality = Qualities.Unknown.value })
-            return true
-        }
-
         iframes.forEach { rawSrc ->
             var src = rawSrc
             if (src.startsWith("//")) src = "https:$src"
             if (src.startsWith("/")) src = "$mainUrl$src"
 
-            // --- DEBUG 2: IN RA ĐỊA CHỈ IFRAME ---
-            callback.invoke(newExtractorLink(source = name, name = "BƯỚC 1: Đang quét iframe ->", url = src) { this.quality = Qualities.Unknown.value })
-            linkFound = true
-
             if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn")) {
                 try {
-                    // Cố gắng tải iframe
-                    val iframeHtml = app.get(src, referer = data).text
-
-                    // --- DEBUG 3: KIỂM TRA MÃ NGUỒN IFRAME ---
-                    if (iframeHtml.isBlank()) {
-                        callback.invoke(newExtractorLink(source = name, name = "LỖI 2: Tải iframe thất bại (Bị server chặn)", url = src) { this.quality = Qualities.Unknown.value })
-                    } else {
-                        callback.invoke(newExtractorLink(source = name, name = "BƯỚC 2: Tải thành công mã nguồn (${iframeHtml.length} ký tự)", url = src) { this.quality = Qualities.Unknown.value })
-                    }
+                    val iframeHtml = app.get(
+                        src,
+                        headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+                            "Referer" to data
+                        )
+                    ).text
 
                     // TÌM BIẾN JS link_video_sd hoặc link_video_hd
                     val varRegex = Regex("""link_video_(?:sd|hd)\s*=\s*["']([^"']+)["']""")
-                    val matches = varRegex.findAll(iframeHtml).toList()
+                    varRegex.findAll(iframeHtml).forEach { match ->
+                        var link = match.groupValues[1]
+                        val isHd = match.value.contains("_hd")
 
-                    if (matches.isEmpty()) {
-                        callback.invoke(newExtractorLink(source = name, name = "LỖI 3: Mã nguồn không chứa biến link_video", url = src) { this.quality = Qualities.Unknown.value })
-                    }
-
-                    matches.forEach { match ->
-                        val link = match.groupValues[1]
                         if (link.isNotBlank()) {
+                            // MẸO SỬA LỖI 3003: ÉP ĐUÔI .MP4 NẾU CHƯA CÓ
+                            if (!link.contains(".mp4") && !link.contains(".m3u8")) {
+                                link += "#.mp4"
+                            }
+
                             callback.invoke(
-                                newExtractorLink(source = name, name = "THÀNH CÔNG: Đã cào được link video!", url = link) {
+                                newExtractorLink(
+                                    source = name,
+                                    name = if (isHd) "VN2Data HD" else "VN2Data SD",
+                                    url = link
+                                ) {
                                     this.referer = src
-                                    this.quality = Qualities.Unknown.value
+                                    this.quality = if (isHd) Qualities.P1080.value else Qualities.P720.value
                                 }
                             )
-                        } else {
-                            callback.invoke(newExtractorLink(source = name, name = "LỖI 4: Có biến link_video nhưng link bị trống rỗng", url = src) { this.quality = Qualities.Unknown.value })
+                            linkFound = true
                         }
                     }
 
-                    // TÌM THÊM PLAY2.PHP (Trường hợp web nhúng 2 lớp iframe)
+                    // TÌM THÊM PLAY2.PHP NẾU CÓ
                     val phpRegex = Regex("""php_content_embed\s*=\s*["']([^"']+)["']""")
                     phpRegex.findAll(iframeHtml).forEach { match ->
                         val play2Link = match.groupValues[1]
-                        if (play2Link.isNotBlank()) {
-                            callback.invoke(newExtractorLink(source = name, name = "THÔNG TIN PHỤ: Tìm thấy link dự phòng play2.php", url = play2Link) { this.quality = Qualities.Unknown.value })
+                        if (play2Link.isNotBlank() && play2Link.startsWith("http")) {
+                            loadExtractor(play2Link, src, subtitleCallback, callback)
+                            linkFound = true
                         }
                     }
 
                 } catch (e: Exception) {
-                    callback.invoke(newExtractorLink(source = name, name = "LỖI CRASH: ${e.message}", url = src) { this.quality = Qualities.Unknown.value })
+                    // Bỏ qua lỗi ngầm
                 }
+            } else if (src.isNotBlank() && src.startsWith("http")) {
+                loadExtractor(src, mainUrl, subtitleCallback, callback)
+                linkFound = true
             }
         }
         return linkFound
