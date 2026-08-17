@@ -105,104 +105,79 @@ class Vn2cProvider : MainAPI() {
         }
     }
 
-    // NÂNG CẤP BẮT LINK VÉT CẠN (BRUTE-FORCE) VÀ CHỐNG CRASH
+    // =========================================================================
+    // BẬT CHẾ ĐỘ DEBUG: IN LỖI TRỰC TIẾP RA MÀN HÌNH CHỌN SERVER
+    // =========================================================================
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         var linkFound = false
+        val document = app.get(data).document
 
-        // Tải trang xem phim (chỉ gọi app.get 1 lần để tối ưu)
-        val response = app.get(data)
-        val mainHtml = response.text
-        val document = response.document
-
-        // Tạo danh sách chứa TẤT CẢ iframe tìm thấy bằng cả 2 cách (DOM và Regex Text)
         val iframes = mutableListOf<String>()
-
         document.select("iframe").forEach { iframes.add(it.attr("src")) }
 
-        Regex("""<iframe[^>]+src=["']([^"']+)["']""").findAll(mainHtml).forEach {
-            iframes.add(it.groupValues[1])
+        // --- DEBUG 1: TÌM IFRAME ---
+        if (iframes.isEmpty()) {
+            callback.invoke(newExtractorLink(source = name, name = "LỖI 1: Không tìm thấy iframe nào trên trang", url = data) { this.quality = Qualities.Unknown.value })
+            return true
         }
 
-        // Lọc trùng và quét từng iframe
-        iframes.filter { it.isNotBlank() }.distinct().forEach { rawSrc ->
+        iframes.forEach { rawSrc ->
             var src = rawSrc
             if (src.startsWith("//")) src = "https:$src"
             if (src.startsWith("/")) src = "$mainUrl$src"
 
-            if (src.startsWith("http")) {
-                loadExtractor(src, mainUrl, subtitleCallback, callback)
+            // --- DEBUG 2: IN RA ĐỊA CHỈ IFRAME ---
+            callback.invoke(newExtractorLink(source = name, name = "BƯỚC 1: Đang quét iframe ->", url = src) { this.quality = Qualities.Unknown.value })
+            linkFound = true
 
-                if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn") || src.contains("phim.php")) {
-                    try {
-                        // Gọi iframe với Header giả lập
-                        val iframeHtml = app.get(
-                            src,
-                            headers = mapOf(
-                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
-                                "Referer" to data,
-                                "Accept" to "*/*"
-                            )
-                        ).text
+            if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn")) {
+                try {
+                    // Cố gắng tải iframe
+                    val iframeHtml = app.get(src, referer = data).text
 
-                        // Chiến thuật 1: Quét biến link_video_sd và link_video_hd
-                        val varRegex = Regex("""link_video_(?:sd|hd)\s*=\s*["'](http[^"']+)["']""")
-                        varRegex.findAll(iframeHtml).forEach { match ->
-                            val link = match.groupValues[1]
-                            val isHd = match.value.contains("_hd")
+                    // --- DEBUG 3: KIỂM TRA MÃ NGUỒN IFRAME ---
+                    if (iframeHtml.isBlank()) {
+                        callback.invoke(newExtractorLink(source = name, name = "LỖI 2: Tải iframe thất bại (Bị server chặn)", url = src) { this.quality = Qualities.Unknown.value })
+                    } else {
+                        callback.invoke(newExtractorLink(source = name, name = "BƯỚC 2: Tải thành công mã nguồn (${iframeHtml.length} ký tự)", url = src) { this.quality = Qualities.Unknown.value })
+                    }
 
+                    // TÌM BIẾN JS link_video_sd hoặc link_video_hd
+                    val varRegex = Regex("""link_video_(?:sd|hd)\s*=\s*["']([^"']+)["']""")
+                    val matches = varRegex.findAll(iframeHtml).toList()
+
+                    if (matches.isEmpty()) {
+                        callback.invoke(newExtractorLink(source = name, name = "LỖI 3: Mã nguồn không chứa biến link_video", url = src) { this.quality = Qualities.Unknown.value })
+                    }
+
+                    matches.forEach { match ->
+                        val link = match.groupValues[1]
+                        if (link.isNotBlank()) {
                             callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = if (isHd) "Server HD" else "Server SD",
-                                    url = link
-                                ) {
-                                    this.referer = src
-                                    this.quality = if (isHd) Qualities.P1080.value else Qualities.P720.value
-                                }
-                            )
-                            linkFound = true
-                        }
-
-                        // Chiến thuật 2: Quét link MP4 / M3U8 trực tiếp bị ẩn
-                        val directRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
-                        directRegex.findAll(iframeHtml).forEach { match ->
-                            val link = match.groupValues[1]
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = if (link.contains(".m3u8")) "HLS Server" else "MP4 Server",
-                                    url = link
-                                ) {
+                                newExtractorLink(source = name, name = "THÀNH CÔNG: Đã cào được link video!", url = link) {
                                     this.referer = src
                                     this.quality = Qualities.Unknown.value
                                 }
                             )
-                            linkFound = true
+                        } else {
+                            callback.invoke(newExtractorLink(source = name, name = "LỖI 4: Có biến link_video nhưng link bị trống rỗng", url = src) { this.quality = Qualities.Unknown.value })
                         }
-                    } catch (e: Exception) {
-                        // Bỏ qua lỗi ngầm để tiếp tục quét iframe khác
                     }
+
+                    // TÌM THÊM PLAY2.PHP (Trường hợp web nhúng 2 lớp iframe)
+                    val phpRegex = Regex("""php_content_embed\s*=\s*["']([^"']+)["']""")
+                    phpRegex.findAll(iframeHtml).forEach { match ->
+                        val play2Link = match.groupValues[1]
+                        if (play2Link.isNotBlank()) {
+                            callback.invoke(newExtractorLink(source = name, name = "THÔNG TIN PHỤ: Tìm thấy link dự phòng play2.php", url = play2Link) { this.quality = Qualities.Unknown.value })
+                        }
+                    }
+
+                } catch (e: Exception) {
+                    callback.invoke(newExtractorLink(source = name, name = "LỖI CRASH: ${e.message}", url = src) { this.quality = Qualities.Unknown.value })
                 }
             }
         }
-
-        // Chiến thuật 3: Dự phòng trường hợp web vứt link video ra ngoài mainHtml
-        val backupRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
-        backupRegex.findAll(mainHtml).forEach { match ->
-            val link = match.groupValues[1]
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = "Backup Server",
-                    url = link
-                ) {
-                    this.referer = mainUrl
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-            linkFound = true
-        }
-
         return linkFound
     }
 }
