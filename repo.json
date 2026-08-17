@@ -1,0 +1,8 @@
+{
+  "name": "Tung Lam Repository",
+  "description": "Kho Plugin Cloudstream tự làm",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/tunglam0711/TestPlugins/builds/plugins.json"
+  ]
+}
