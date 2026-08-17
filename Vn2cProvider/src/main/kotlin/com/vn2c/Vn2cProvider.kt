@@ -3,6 +3,7 @@ package com.vn2c
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.text.Normalizer
 
 class Vn2cProvider : MainAPI() {
     override var mainUrl = "https://www.vn2c.my"
@@ -17,7 +18,6 @@ class Vn2cProvider : MainAPI() {
         TvType.AsianDrama
     )
 
-    // Đã mở rộng Selector tìm kiếm để vét cạn các giao diện
     private val ITEM_SELECTOR = "div.Form2, ul.list-film li, div.item, div.film-item"
     private val LINK_SELECTOR = "a"
     private val POSTER_SELECTOR = "img.c10, img.lazy, img"
@@ -33,6 +33,14 @@ class Vn2cProvider : MainAPI() {
         "$mainUrl/the-loai2/hoat-hinh-anime-29" to "Hoạt Hình Anime"
     )
 
+    // Hàm hỗ trợ xóa dấu tiếng Việt để tìm kiếm chính xác (VD: "Nam Hí" -> "nam-hi")
+    private fun String.toSlug(): String {
+        val normalized = Normalizer.normalize(this.trim(), Normalizer.Form.NFD)
+        val noDiacritics = Regex("\\p{InCombiningDiacriticalMarks}+").replace(normalized, "")
+            .replace("đ", "d").replace("Đ", "D")
+        return noDiacritics.replace(Regex("\\s+"), "-").lowercase()
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(request.data).document
         val home = document.select(ITEM_SELECTOR).mapNotNull { it.toSearchResult() }
@@ -40,7 +48,7 @@ class Vn2cProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val formattedQuery = query.trim().replace(" ", "-")
+        val formattedQuery = query.toSlug()
         val url = "$mainUrl/tim-kiem/$formattedQuery"
 
         val document = app.get(url).document
@@ -63,7 +71,7 @@ class Vn2cProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst("h1, .box_film_title, .title")?.text() ?: "Không tên"
-        val poster = document.selectFirst(POSTER_SELECTOR)?.attr("src")
+        val poster = document.selectFirst(POSTER_SELECTOR)?.attr("src") ?: document.selectFirst(POSTER_SELECTOR)?.attr("data-src")
         val plot = document.selectFirst(DESCRIPTION_SELECTOR)?.text()
 
         val episodes = mutableListOf<Episode>()
@@ -92,36 +100,54 @@ class Vn2cProvider : MainAPI() {
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         var linkFound = false
-        val response = app.get(data)
+
+        // Thêm Header giả lập trình duyệt để tránh bị chặn
+        val headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+            "Referer" to mainUrl
+        )
+
+        val response = app.get(data, headers = headers)
         val document = response.document
         val mainHtml = response.text
 
         val iframes = mutableListOf<String>()
-        document.select("iframe").forEach { iframes.add(it.attr("src")) }
-        Regex("""<iframe[^>]+src=["']([^"']+)["']""").findAll(mainHtml).forEach { iframes.add(it.groupValues[1]) }
+
+        // 1. Tìm iframe bằng cách xét DOM (Ưu tiên lấy cả data-src nếu bị ẩn)
+        document.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
+            if (src.isNotBlank()) iframes.add(src)
+        }
+
+        // 2. Tìm iframe bằng Regex quét toàn bộ mã nguồn đề phòng JS ẩn
+        val playerUrlRegex = Regex("""(https?://[^"']*(?:vn2data|play\.php|cloudcdnvn|phim\.php)[^"']*)""")
+        playerUrlRegex.findAll(mainHtml).forEach { match ->
+            iframes.add(match.groupValues[1])
+        }
 
         iframes.filter { it.isNotBlank() }.distinct().forEach { rawSrc ->
             var src = rawSrc
             if (src.startsWith("//")) src = "https:$src"
             if (src.startsWith("/")) src = "$mainUrl$src"
 
-            if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn")) {
+            if (src.contains("vn2data") || src.contains("play.php") || src.contains("cloudcdnvn") || src.contains("phim.php")) {
                 try {
                     val iframeHtml = app.get(
                         src,
                         headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+                            "User-Agent" to headers["User-Agent"]!!,
                             "Referer" to data
                         )
                     ).text
 
+                    // Quét link HD và SD
                     val varRegex = Regex("""link_video_(?:sd|hd)\s*=\s*["'](http[^"']+)["']""")
                     varRegex.findAll(iframeHtml).forEach { match ->
                         var link = match.groupValues[1]
                         val isHd = match.value.contains("_hd")
 
                         if (link.isNotBlank()) {
-                            // Ép đuôi mp4 để lừa trình phát, tránh lỗi 3003
+                            // Sửa lỗi 3003 (Không hỗ trợ định dạng)
                             if (!link.contains(".mp4") && !link.contains(".m3u8")) {
                                 link += "#.mp4"
                             }
@@ -139,13 +165,36 @@ class Vn2cProvider : MainAPI() {
                         }
                     }
 
+                    // Quét play2.php (lớp iframe thứ 2)
                     val phpRegex = Regex("""php_content_embed\s*=\s*["']([^"']+)["']""")
                     phpRegex.findAll(iframeHtml).forEach { match ->
-                        val play2Link = match.groupValues[1]
-                        if (play2Link.isNotBlank() && play2Link.startsWith("http")) {
-                            loadExtractor(play2Link, src, subtitleCallback, callback)
-                            linkFound = true
+                        var play2Link = match.groupValues[1]
+                        if (play2Link.isNotBlank()) {
+                            if (play2Link.startsWith("//")) play2Link = "https:$play2Link"
+                            if (play2Link.startsWith("/")) play2Link = "https://vn2data.com$play2Link"
+
+                            if (play2Link.startsWith("http")) {
+                                loadExtractor(play2Link, src, subtitleCallback, callback)
+                                linkFound = true
+                            }
                         }
+                    }
+
+                    // Quét dự phòng link trực tiếp trong iframe
+                    val directRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
+                    directRegex.findAll(iframeHtml).forEach { match ->
+                        val link = match.groupValues[1]
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = if (link.contains(".m3u8")) "HLS Server" else "MP4 Server",
+                                url = link
+                            ) {
+                                this.referer = src
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                        linkFound = true
                     }
                 } catch (e: Exception) {}
             } else if (src.startsWith("http")) {
@@ -153,6 +202,24 @@ class Vn2cProvider : MainAPI() {
                 linkFound = true
             }
         }
+
+        // Quét dự phòng trực tiếp trên mainHtml
+        val fallbackRegex = Regex("""(?:file|src)\s*["']?\s*:\s*["'](http[^"']+(?:\.m3u8|\.mp4)[^"']*)["']""")
+        fallbackRegex.findAll(mainHtml).forEach { match ->
+            val link = match.groupValues[1]
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "Backup Server",
+                    url = link
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+            linkFound = true
+        }
+
         return linkFound
     }
 }
