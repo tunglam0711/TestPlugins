@@ -6,11 +6,18 @@ import org.jsoup.nodes.Element
 
 class Vn2cProvider : MainAPI() {
 
+    // =========================================================
+    // THÔNG TIN PROVIDER
+    // =========================================================
+
     override var mainUrl = "https://www.vn2c.my"
+
     override var name = "PhimVN2"
+
     override var lang = "vi"
 
     override val hasMainPage = true
+
     override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
@@ -21,32 +28,115 @@ class Vn2cProvider : MainAPI() {
     )
 
     // =========================================================
-    // HEADER
+    // SELECTOR
+    // =========================================================
+
+    private val itemSelector =
+        "div.Form2, div.boxtk"
+
+    private val posterSelector =
+        "img.c10, div.boxtk_img img, img"
+
+    private val episodeSelector =
+        "div.num_film a"
+
+    private val descriptionSelector =
+        "div.wiew_info p, div.info-film, .content-film"
+
+    // =========================================================
+    // USER AGENT
     // =========================================================
 
     private val userAgent =
-        "Mozilla/5.0 (Linux; Android 13) " +
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/120.0.0.0 Mobile Safari/537.36"
+                "Chrome/151.0.0.0 Safari/537.36"
 
-    private val requestHeaders = mapOf(
-        "User-Agent" to userAgent,
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language" to "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Connection" to "keep-alive"
-    )
+    private fun getHeaders(
+        referer: String
+    ): Map<String, String> {
+
+        return mapOf(
+            "User-Agent" to userAgent,
+            "Referer" to referer,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language" to "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection" to "keep-alive"
+        )
+    }
 
     // =========================================================
     // MAIN PAGE
     // =========================================================
 
     override val mainPage = mainPageOf(
-        "$mainUrl/phim-moi-vn2-phim-2vn-phim/new" to "Phim Mới",
-        "$mainUrl/danh-muc/trung-quoc-7" to "Phim Trung Quốc",
-        "$mainUrl/danh-muc/han-quoc-10" to "Phim Hàn Quốc",
-        "$mainUrl/danh-muc/thai-lan-8" to "Phim Thái Lan",
-        "$mainUrl/the-loai2/hoat-hinh-anime-29" to "Hoạt Hình Anime"
+
+        "$mainUrl/phim-moi-vn2-phim-2vn-phim/new" to
+                "Phim Mới",
+
+        "$mainUrl/danh-muc/trung-quoc-7" to
+                "Phim Trung Quốc",
+
+        "$mainUrl/danh-muc/han-quoc-10" to
+                "Phim Hàn Quốc",
+
+        "$mainUrl/danh-muc/thai-lan-8" to
+                "Phim Thái Lan",
+
+        "$mainUrl/the-loai2/hoat-hinh-anime-29" to
+                "Hoạt Hình Anime"
     )
+
+    // =========================================================
+    // BỎ DẤU TIẾNG VIỆT
+    // =========================================================
+
+    private fun String.toSlug(): String {
+
+        var text = this
+            .trim()
+            .lowercase()
+
+        val groups = listOf(
+
+            "áàảãạăắằẳẵặâấầẩẫậ" to "a",
+
+            "éèẻẽẹêếềểễệ" to "e",
+
+            "íìỉĩị" to "i",
+
+            "óòỏõọôốồổỗộơớờởỡợ" to "o",
+
+            "úùủũụưứừửữự" to "u",
+
+            "ýỳỷỹỵ" to "y",
+
+            "đ" to "d"
+        )
+
+        for ((characters, replacement) in groups) {
+
+            for (character in characters) {
+
+                text = text.replace(
+                    character.toString(),
+                    replacement
+                )
+            }
+        }
+
+        text = text.replace(
+            Regex("[^a-z0-9]+"),
+            "-"
+        )
+
+        text = text.replace(
+            Regex("-+"),
+            "-"
+        )
+
+        return text.trim('-')
+    }
 
     // =========================================================
     // MAIN PAGE
@@ -57,41 +147,38 @@ class Vn2cProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
-        try {
+        return try {
 
-            val document = app.get(
-                request.data,
-                headers = requestHeaders,
-                referer = mainUrl
-            ).document
-
-            val results = ArrayList<SearchResponse>()
-
-            val elements = document.select(
-                "div.Form2, div.boxtk"
-            )
-
-            for (element in elements) {
-
-                val result = parseSearchResult(element)
-
-                if (result != null) {
-                    results.add(result)
+            val pageUrl =
+                if (page <= 1) {
+                    request.data
+                } else {
+                    "${request.data}?page=$page"
                 }
-            }
 
-            return newHomePageResponse(
+            val document =
+                app.get(
+                    pageUrl,
+                    headers = getHeaders(mainUrl)
+                ).document
+
+            val results =
+                document
+                    .select(itemSelector)
+                    .mapNotNull { element ->
+
+                        element.toSearchResult()
+                    }
+
+            newHomePageResponse(
                 request.name,
-                results.distinctBy { it.url }
+                results,
+                hasNext = results.isNotEmpty()
             )
 
-        } catch (e: Exception) {
+        } catch (_: Exception) {
 
-            println(
-                "VN2 MAIN ERROR: ${e.message}"
-            )
-
-            return newHomePageResponse(
+            newHomePageResponse(
                 request.name,
                 emptyList()
             )
@@ -106,52 +193,34 @@ class Vn2cProvider : MainAPI() {
         query: String
     ): List<SearchResponse> {
 
-        if (query.isBlank()) {
-            return emptyList()
-        }
+        return try {
 
-        val slug = query.toSlug()
+            val slug =
+                query.toSlug()
 
-        val url = "$mainUrl/tim-kiem/$slug"
+            if (slug.isBlank()) {
+                return emptyList()
+            }
 
-        println(
-            "VN2 SEARCH URL = $url"
-        )
+            val searchUrl =
+                "$mainUrl/tim-kiem/$slug"
 
-        try {
+            val document =
+                app.get(
+                    searchUrl,
+                    headers = getHeaders(mainUrl)
+                ).document
 
-            val document = app.get(
-                url,
-                headers = requestHeaders,
-                referer = mainUrl
-            ).document
+            document
+                .select(itemSelector)
+                .mapNotNull { element ->
 
-            val results = ArrayList<SearchResponse>()
-
-            val elements = document.select(
-                "div.Form2, div.boxtk"
-            )
-
-            for (element in elements) {
-
-                val result = parseSearchResult(element)
-
-                if (result != null) {
-                    results.add(result)
+                    element.toSearchResult()
                 }
-            }
 
-            return results.distinctBy {
-                it.url
-            }
+        } catch (_: Exception) {
 
-        } catch (e: Exception) {
-
-            println(
-                "VN2 SEARCH ERROR: ${e.message}"
-            )
-
-            return emptyList()
+            emptyList()
         }
     }
 
@@ -159,52 +228,38 @@ class Vn2cProvider : MainAPI() {
     // SEARCH RESULT
     // =========================================================
 
-    private fun parseSearchResult(
-        element: Element
-    ): SearchResponse? {
+    private fun Element.toSearchResult(): SearchResponse? {
 
-        val linkElement = element.selectFirst("a")
+        val linkElement =
+            selectFirst("a[href]")
+                ?: return null
 
-        if (linkElement == null) {
+        var title =
+            selectFirst("p.nametk a")
+                ?.text()
+
+        if (title.isNullOrBlank()) {
+
+            title =
+                linkElement.attr("title")
+        }
+
+        if (title.isNullOrBlank()) {
+
+            title =
+                linkElement.text()
+        }
+
+        if (title.isNullOrBlank()) {
             return null
         }
 
-        val href = linkElement
-            .attr("href")
-            .trim()
+        val href =
+            linkElement
+                .attr("href")
+                .trim()
 
         if (href.isBlank()) {
-            return null
-        }
-
-        val url = fixUrl(href)
-
-        // -----------------------------------------------------
-        // TITLE
-        // -----------------------------------------------------
-
-        var title = ""
-
-        val nameElement =
-            element.selectFirst("p.nametk a")
-
-        if (nameElement != null) {
-            title = nameElement.text().trim()
-        }
-
-        if (title.isBlank()) {
-            title = linkElement
-                .attr("title")
-                .trim()
-        }
-
-        if (title.isBlank()) {
-            title = linkElement
-                .text()
-                .trim()
-        }
-
-        if (title.isBlank()) {
             return null
         }
 
@@ -214,36 +269,54 @@ class Vn2cProvider : MainAPI() {
 
         var poster: String? = null
 
-        val image = element.selectFirst(
-            "img.c10, div.boxtk_img img, img"
-        )
+        val posterElement =
+            selectFirst(posterSelector)
 
-        if (image != null) {
+        if (posterElement != null) {
 
-            var imageUrl =
-                image.attr("data-src").trim()
+            val dataSrc =
+                posterElement
+                    .attr("data-src")
+                    .trim()
 
-            if (imageUrl.isBlank()) {
-                imageUrl =
-                    image.attr("data-original").trim()
-            }
+            val dataOriginal =
+                posterElement
+                    .attr("data-original")
+                    .trim()
 
-            if (imageUrl.isBlank()) {
-                imageUrl =
-                    image.attr("src").trim()
-            }
+            val src =
+                posterElement
+                    .attr("src")
+                    .trim()
 
-            if (imageUrl.isNotBlank()) {
-                poster = fixUrl(imageUrl)
-            }
+            poster =
+                when {
+
+                    dataSrc.isNotBlank() ->
+                        dataSrc
+
+                    dataOriginal.isNotBlank() ->
+                        dataOriginal
+
+                    src.isNotBlank() ->
+                        src
+
+                    else ->
+                        null
+                }
         }
 
         return newMovieSearchResponse(
-            title,
-            url,
-            TvType.Movie
+            title.trim(),
+            fixUrl(href),
+            TvType.TvSeries
         ) {
-            posterUrl = poster
+
+            if (!poster.isNullOrBlank()) {
+
+                posterUrl =
+                    fixUrlNull(poster)
+            }
         }
     }
 
@@ -255,56 +328,40 @@ class Vn2cProvider : MainAPI() {
         url: String
     ): LoadResponse? {
 
-        try {
+        return try {
 
-            println(
-                "VN2 LOAD = $url"
-            )
+            val response =
+                app.get(
+                    url,
+                    headers = getHeaders(mainUrl)
+                )
 
-            val response = app.get(
-                url,
-                headers = requestHeaders,
-                referer = mainUrl
-            )
-
-            val document = response.document
+            val document =
+                response.document
 
             // -------------------------------------------------
             // TITLE
             // -------------------------------------------------
 
-            var title = ""
+            val titleElement =
+                document.selectFirst(
+                    "h1, .box_film_title, .title, h2"
+                )
 
-            val h1 =
-                document.selectFirst("h1")
-
-            if (h1 != null) {
-                title = h1.text().trim()
-            }
-
-            if (title.isBlank()) {
-
-                val boxTitle =
-                    document.selectFirst(".box_film_title")
-
-                if (boxTitle != null) {
-                    title = boxTitle.text().trim()
-                }
-            }
-
-            if (title.isBlank()) {
-
-                val titleElement =
-                    document.selectFirst(".title")
-
+            val title =
                 if (titleElement != null) {
-                    title = titleElement.text().trim()
-                }
-            }
 
-            if (title.isBlank()) {
-                title = "Không tên"
-            }
+                    titleElement
+                        .text()
+                        .trim()
+                        .ifBlank {
+                            "Không tên"
+                        }
+
+                } else {
+
+                    "Không tên"
+                }
 
             // -------------------------------------------------
             // POSTER
@@ -312,39 +369,41 @@ class Vn2cProvider : MainAPI() {
 
             var poster: String? = null
 
-            val posterElement = document.selectFirst(
-                "img.c10, " +
-                        ".info-film img, " +
-                        ".box_film img, " +
-                        ".film-info img, " +
-                        "img.poster, " +
-                        "img.avatar"
-            )
+            val posterElement =
+                document.selectFirst(posterSelector)
 
             if (posterElement != null) {
 
-                var value =
+                val dataSrc =
                     posterElement
                         .attr("data-src")
                         .trim()
 
-                if (value.isBlank()) {
-                    value =
-                        posterElement
-                            .attr("data-original")
-                            .trim()
-                }
+                val dataOriginal =
+                    posterElement
+                        .attr("data-original")
+                        .trim()
 
-                if (value.isBlank()) {
-                    value =
-                        posterElement
-                            .attr("src")
-                            .trim()
-                }
+                val src =
+                    posterElement
+                        .attr("src")
+                        .trim()
 
-                if (value.isNotBlank()) {
-                    poster = fixUrl(value)
-                }
+                poster =
+                    when {
+
+                        dataSrc.isNotBlank() ->
+                            dataSrc
+
+                        dataOriginal.isNotBlank() ->
+                            dataOriginal
+
+                        src.isNotBlank() ->
+                            src
+
+                        else ->
+                            null
+                    }
             }
 
             // -------------------------------------------------
@@ -353,22 +412,17 @@ class Vn2cProvider : MainAPI() {
 
             var plot: String? = null
 
-            val description =
+            val descriptionElement =
                 document.selectFirst(
-                    "div.wiew_info p, " +
-                            "div.info-film, " +
-                            ".description, " +
-                            ".desc"
+                    descriptionSelector
                 )
 
-            if (description != null) {
+            if (descriptionElement != null) {
 
-                val value =
-                    description.text().trim()
-
-                if (value.isNotBlank()) {
-                    plot = value
-                }
+                plot =
+                    descriptionElement
+                        .text()
+                        .trim()
             }
 
             // -------------------------------------------------
@@ -376,120 +430,85 @@ class Vn2cProvider : MainAPI() {
             // -------------------------------------------------
 
             val episodes =
-                ArrayList<Episode>()
+                mutableListOf<Episode>()
 
             val episodeElements =
                 document.select(
-                    "div.num_film a, " +
-                            ".list-episode a, " +
-                            ".episodes a, " +
-                            ".episode a, " +
-                            "a[href*='/tap-']"
+                    episodeSelector
                 )
 
-            for (element in episodeElements) {
-
-                val href =
-                    element.attr("href").trim()
-
-                if (href.isBlank()) {
-                    continue
-                }
+            episodeElements.forEachIndexed {
+                    index,
+                    element ->
 
                 val episodeUrl =
-                    fixUrl(href)
+                    element
+                        .attr("href")
+                        .trim()
+
+                if (episodeUrl.isBlank()) {
+                    return@forEachIndexed
+                }
 
                 var episodeName =
-                    element.text().trim()
+                    element
+                        .text()
+                        .trim()
 
                 if (episodeName.isBlank()) {
 
                     episodeName =
-                        extractEpisodeName(
-                            episodeUrl
-                        )
+                        "Tập ${index + 1}"
                 }
 
                 episodes.add(
                     newEpisode(
-                        episodeUrl
+                        data = fixUrl(episodeUrl)
                     ) {
-                        name = episodeName
+
+                        name =
+                            episodeName
                     }
                 )
             }
 
-            val uniqueEpisodes =
-                episodes.distinctBy {
-                    it.data
-                }
-
             // -------------------------------------------------
-            // NO EPISODE
+            // NẾU KHÔNG CÓ TẬP
             // -------------------------------------------------
 
-            if (uniqueEpisodes.isEmpty()) {
+            if (episodes.isEmpty()) {
 
-                var playUrl = ""
+                episodes.add(
+                    newEpisode(
+                        data = url
+                    ) {
 
-                val playButton =
-                    document.selectFirst(
-                        "div.playphim a, " +
-                                "a.btn-play, " +
-                                ".play-btn a"
-                    )
-
-                if (playButton != null) {
-
-                    playUrl =
-                        playButton
-                            .attr("href")
-                            .trim()
-                }
-
-                if (playUrl.isBlank()) {
-                    playUrl = url
-                } else {
-                    playUrl = fixUrl(playUrl)
-                }
-
-                val episode =
-                    newEpisode(playUrl) {
                         name = "Full"
                     }
-
-                return newTvSeriesLoadResponse(
-                    title,
-                    url,
-                    TvType.TvSeries,
-                    listOf(episode)
-                ) {
-                    posterUrl = poster
-                    this.plot = plot
-                }
+                )
             }
 
             // -------------------------------------------------
             // RETURN
             // -------------------------------------------------
 
-            return newTvSeriesLoadResponse(
+            newTvSeriesLoadResponse(
                 title,
                 url,
                 TvType.TvSeries,
-                uniqueEpisodes
+                episodes
             ) {
-                posterUrl = poster
-                this.plot = plot
+
+                posterUrl =
+                    fixUrlNull(poster)
+
+                this.plot =
+                    plot
             }
 
-        } catch (e: Exception) {
+        } catch (_: Exception) {
 
-            println(
-                "VN2 LOAD ERROR = ${e.message}"
-            )
-
-            return null
+            null
         }
     }
 
@@ -504,537 +523,306 @@ class Vn2cProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        println("====================================")
-        println("VN2 LOADLINK START")
-        println("VN2 EPISODE = $data")
-        println("====================================")
+        var found = false
 
         try {
 
-            // -------------------------------------------------
-            // STEP 1
-            // OPEN EPISODE
-            // -------------------------------------------------
+            // =================================================
+            // 1. MỞ TRANG TẬP
+            // =================================================
 
-            val response = app.get(
-                data,
-                headers = requestHeaders,
-                referer = mainUrl
-            )
-
-            val html = response.text
-
-            println(
-                "VN2 EPISODE HTML LENGTH = ${html.length}"
-            )
-
-            // -------------------------------------------------
-            // STEP 2
-            // SEARCH DIRECT VIDEO
-            // -------------------------------------------------
-
-            var found = false
-
-            val directSd =
-                findVariable(
-                    html,
-                    "link_video_sd"
-                )
-
-            val directHd =
-                findVariable(
-                    html,
-                    "link_video_hd"
-                )
-
-            if (!directSd.isNullOrBlank()) {
-
-                println(
-                    "VN2 DIRECT SD = $directSd"
-                )
-
-                addVideoLink(
-                    directSd,
-                    "CloudCDN SD",
+            val response =
+                app.get(
                     data,
-                    callback
+                    headers = getHeaders(mainUrl)
                 )
 
-                found = true
-            }
+            val html =
+                response.text
 
-            if (
-                !directHd.isNullOrBlank() &&
-                directHd != directSd
-            ) {
+            val document =
+                response.document
 
-                println(
-                    "VN2 DIRECT HD = $directHd"
-                )
+            // =================================================
+            // 2. TÌM IFRAME
+            // =================================================
 
-                addVideoLink(
-                    directHd,
-                    "CloudCDN HD",
-                    data,
-                    callback
-                )
-
-                found = true
-            }
-
-            if (found) {
-
-                println(
-                    "VN2 FOUND DIRECT VIDEO"
-                )
-
-                return true
-            }
-
-            // -------------------------------------------------
-            // STEP 3
-            // FIND IFRAME
-            // -------------------------------------------------
+            val iframeUrls =
+                mutableListOf<String>()
 
             val iframeElements =
-                response.document.select("iframe")
-
-            println(
-                "VN2 IFRAME COUNT = ${iframeElements.size}"
-            )
+                document.select("iframe")
 
             for (iframe in iframeElements) {
 
                 var iframeUrl =
-                    iframe.attr("src").trim()
+                    iframe
+                        .attr("src")
+                        .trim()
 
                 if (iframeUrl.isBlank()) {
+
                     iframeUrl =
                         iframe
                             .attr("data-src")
                             .trim()
                 }
 
-                if (iframeUrl.isBlank()) {
-                    continue
-                }
+                if (iframeUrl.isNotBlank()) {
 
-                if (iframeUrl.startsWith("//")) {
-                    iframeUrl =
-                        "https:$iframeUrl"
+                    iframeUrls.add(
+                        fixUrl(iframeUrl)
+                    )
                 }
+            }
 
-                if (iframeUrl.startsWith("/")) {
-                    iframeUrl =
-                        mainUrl + iframeUrl
-                }
+            // =================================================
+            // 3. TÌM IFRAME TRONG HTML
+            // =================================================
 
-                println(
-                    "VN2 IFRAME = $iframeUrl"
+            val iframeRegex =
+                Regex(
+                    """(?:src|data-src)\s*=\s*["']([^"']+)["']""",
+                    RegexOption.IGNORE_CASE
                 )
 
-                // -------------------------------------------------
-                // VN2DATA
-                // -------------------------------------------------
+            for (match in iframeRegex.findAll(html)) {
 
-                if (
-                    iframeUrl.contains(
-                        "vn2data",
-                        ignoreCase = true
+                val value =
+                    match
+                        .groupValues
+                        .getOrNull(1)
+                        ?.trim()
+
+                if (!value.isNullOrBlank()) {
+
+                    iframeUrls.add(
+                        fixUrl(value)
                     )
-                ) {
+                }
+            }
 
-                    val result =
-                        loadVn2Data(
-                            iframeUrl,
-                            data,
-                            callback
-                        )
+            // =================================================
+            // 4. TÌM VN2DATA TRONG HTML
+            // =================================================
 
-                    if (result) {
-                        found = true
+            val vn2dataRegex =
+                Regex(
+                    """https?://[^"'\s<>]+vn2data[^"'\s<>]+""",
+                    RegexOption.IGNORE_CASE
+                )
+
+            for (match in vn2dataRegex.findAll(html)) {
+
+                iframeUrls.add(
+                    match.value
+                )
+            }
+
+            // =================================================
+            // 5. LOẠI LINK TRÙNG
+            // =================================================
+
+            val uniqueUrls =
+                iframeUrls
+                    .map { it.trim() }
+                    .filter {
+                        it.startsWith("http://") ||
+                                it.startsWith("https://")
                     }
-                }
+                    .distinct()
 
-                // -------------------------------------------------
-                // PLAY.PHP
-                // -------------------------------------------------
+            // =================================================
+            // 6. XỬ LÝ IFRAME
+            // =================================================
 
-                else if (
-                    iframeUrl.contains(
-                        "play.php",
-                        ignoreCase = true
-                    )
-                ) {
-
-                    val result =
-                        loadVn2Data(
-                            iframeUrl,
-                            data,
-                            callback
-                        )
-
-                    if (result) {
-                        found = true
-                    }
-                }
-
-                // -------------------------------------------------
-                // OTHER IFRAME
-                // -------------------------------------------------
-
-                else {
-
-                    try {
-
-                        loadExtractor(
-                            iframeUrl,
-                            data,
-                            subtitleCallback,
-                            callback
-                        )
-
-                        found = true
-
-                    } catch (e: Exception) {
-
-                        println(
-                            "VN2 EXTRACTOR ERROR = ${e.message}"
-                        )
-                    }
-                }
-            }
-
-            // -------------------------------------------------
-            // STEP 4
-            // SEARCH MP4 IN EPISODE HTML
-            // -------------------------------------------------
-
-            if (!found) {
-
-                val mp4Urls =
-                    findMp4Urls(html)
-
-                println(
-                    "VN2 EPISODE MP4 COUNT = ${mp4Urls.size}"
-                )
-
-                for (videoUrl in mp4Urls) {
-
-                    addVideoLink(
-                        videoUrl,
-                        "CloudCDN",
-                        data,
-                        callback
-                    )
-
-                    found = true
-                }
-            }
-
-            // -------------------------------------------------
-            // STEP 5
-            // SEARCH M3U8
-            // -------------------------------------------------
-
-            if (!found) {
-
-                val m3u8Urls =
-                    findM3u8Urls(html)
-
-                println(
-                    "VN2 EPISODE M3U8 COUNT = ${m3u8Urls.size}"
-                )
-
-                for (videoUrl in m3u8Urls) {
-
-                    addVideoLink(
-                        videoUrl,
-                        "CloudCDN HLS",
-                        data,
-                        callback
-                    )
-
-                    found = true
-                }
-            }
-
-            println(
-                "VN2 FINAL_FOUND = $found"
-            )
-
-            return found
-
-        } catch (e: Exception) {
-
-            println(
-                "VN2 LOADLINK ERROR = ${e.message}"
-            )
-
-            e.printStackTrace()
-
-            return false
-        }
-    }
-
-    // =========================================================
-    // VN2DATA
-    // =========================================================
-
-    private suspend fun loadVn2Data(
-        url: String,
-        episodeUrl: String,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-
-        println("------------------------------------")
-        println("VN2DATA REQUEST")
-        println(url)
-        println("------------------------------------")
-
-        try {
-
-            val response =
-                app.get(
-                    url,
-                    headers = mapOf(
-                        "User-Agent" to userAgent,
-                        "Accept" to "*/*",
-                        "Referer" to episodeUrl
-                    ),
-                    referer = episodeUrl
-                )
-
-            val html =
-                response.text
-
-            println(
-                "VN2DATA HTML LENGTH = ${html.length}"
-            )
-
-            // -------------------------------------------------
-            // SD
-            // -------------------------------------------------
-
-            val sd =
-                findVariable(
-                    html,
-                    "link_video_sd"
-                )
-
-            // -------------------------------------------------
-            // HD
-            // -------------------------------------------------
-
-            val hd =
-                findVariable(
-                    html,
-                    "link_video_hd"
-                )
-
-            // -------------------------------------------------
-            // PLAY2
-            // -------------------------------------------------
-
-            val play2 =
-                findVariable(
-                    html,
-                    "php_content_embed"
-                )
-
-            println(
-                "VN2DATA SD = $sd"
-            )
-
-            println(
-                "VN2DATA HD = $hd"
-            )
-
-            println(
-                "VN2DATA PLAY2 = $play2"
-            )
-
-            var found = false
-
-            // -------------------------------------------------
-            // SD LINK
-            // -------------------------------------------------
-
-            if (!sd.isNullOrBlank()) {
-
-                addVideoLink(
-                    sd,
-                    "CloudCDN SD",
-                    url,
-                    callback
-                )
-
-                found = true
-            }
-
-            // -------------------------------------------------
-            // HD LINK
-            // -------------------------------------------------
-
-            if (
-                !hd.isNullOrBlank() &&
-                hd != sd
-            ) {
-
-                addVideoLink(
-                    hd,
-                    "CloudCDN HD",
-                    url,
-                    callback
-                )
-
-                found = true
-            }
-
-            // -------------------------------------------------
-            // MP4 SEARCH
-            // -------------------------------------------------
-
-            if (!found) {
-
-                val mp4Urls =
-                    findMp4Urls(html)
-
-                println(
-                    "VN2DATA MP4 COUNT = ${mp4Urls.size}"
-                )
-
-                for (videoUrl in mp4Urls) {
-
-                    addVideoLink(
-                        videoUrl,
-                        "CloudCDN",
-                        url,
-                        callback
-                    )
-
-                    found = true
-                }
-            }
-
-            // -------------------------------------------------
-            // M3U8 SEARCH
-            // -------------------------------------------------
-
-            if (!found) {
-
-                val m3u8Urls =
-                    findM3u8Urls(html)
-
-                println(
-                    "VN2DATA M3U8 COUNT = ${m3u8Urls.size}"
-                )
-
-                for (videoUrl in m3u8Urls) {
-
-                    addVideoLink(
-                        videoUrl,
-                        "CloudCDN HLS",
-                        url,
-                        callback
-                    )
-
-                    found = true
-                }
-            }
-
-            // -------------------------------------------------
-            // PLAY2
-            // -------------------------------------------------
-
-            if (
-                !found &&
-                !play2.isNullOrBlank() &&
-                play2.startsWith("http")
-            ) {
-
-                println(
-                    "VN2DATA TRY PLAY2"
-                )
+            for (iframeUrl in uniqueUrls) {
 
                 try {
 
-                    val response2 =
+                    val frameResponse =
                         app.get(
-                            play2,
-                            headers = mapOf(
-                                "User-Agent" to userAgent,
-                                "Accept" to "*/*",
-                                "Referer" to url
-                            ),
-                            referer = url
+                            iframeUrl,
+                            headers = getHeaders(data)
                         )
 
-                    val html2 =
-                        response2.text
+                    val frameHtml =
+                        frameResponse.text
 
-                    println(
-                        "VN2DATA PLAY2 HTML = ${html2.length}"
-                    )
+                    // =========================================
+                    // DIRECT MP4 / M3U8
+                    // =========================================
 
-                    val sd2 =
-                        findVariable(
-                            html2,
+                    val directVideos =
+                        extractVideoUrls(
+                            frameHtml
+                        )
+
+                    for (videoUrl in directVideos) {
+
+                        val serverName =
+                            if (
+                                videoUrl.contains(
+                                    "cloudcdnvn",
+                                    ignoreCase = true
+                                )
+                            ) {
+
+                                "CloudCDN"
+
+                            } else {
+
+                                "VN2 Server"
+                            }
+
+                        addVideoLink(
+                            videoUrl,
+                            serverName,
+                            iframeUrl,
+                            callback
+                        )
+
+                        found = true
+                    }
+
+                    // =========================================
+                    // link_video_sd
+                    // =========================================
+
+                    val sd =
+                        extractJsVariable(
+                            frameHtml,
                             "link_video_sd"
                         )
 
-                    val hd2 =
-                        findVariable(
-                            html2,
+                    if (!sd.isNullOrBlank()) {
+
+                        addVideoLink(
+                            sd,
+                            "CloudCDN SD",
+                            iframeUrl,
+                            callback
+                        )
+
+                        found = true
+                    }
+
+                    // =========================================
+                    // link_video_hd
+                    // =========================================
+
+                    val hd =
+                        extractJsVariable(
+                            frameHtml,
                             "link_video_hd"
                         )
 
-                    println(
-                        "VN2DATA PLAY2 SD = $sd2"
-                    )
-
-                    println(
-                        "VN2DATA PLAY2 HD = $hd2"
-                    )
-
-                    if (!sd2.isNullOrBlank()) {
+                    if (!hd.isNullOrBlank()) {
 
                         addVideoLink(
-                            sd2,
-                            "CloudCDN SD",
-                            play2,
+                            hd,
+                            "CloudCDN HD",
+                            iframeUrl,
                             callback
                         )
 
                         found = true
                     }
+
+                    // =========================================
+                    // php_content_embed
+                    // =========================================
+
+                    val phpEmbed =
+                        extractJsVariable(
+                            frameHtml,
+                            "php_content_embed"
+                        )
 
                     if (
-                        !hd2.isNullOrBlank() &&
-                        hd2 != sd2
+                        !phpEmbed.isNullOrBlank() &&
+                        !phpEmbed.contains(
+                            "loi3.htm",
+                            ignoreCase = true
+                        )
                     ) {
 
-                        addVideoLink(
-                            hd2,
-                            "CloudCDN HD",
-                            play2,
-                            callback
-                        )
+                        val embedUrl =
+                            fixUrl(phpEmbed)
 
-                        found = true
-                    }
+                        // -------------------------------------
+                        // MỞ PLAY2.PHP
+                        // -------------------------------------
 
-                    if (!found) {
+                        val embedResponse =
+                            app.get(
+                                embedUrl,
+                                headers =
+                                    getHeaders(iframeUrl)
+                            )
 
-                        val mp4 =
-                            findMp4Urls(html2)
+                        val embedHtml =
+                            embedResponse.text
 
-                        for (videoUrl in mp4) {
+                        // -------------------------------------
+                        // VIDEO TRỰC TIẾP
+                        // -------------------------------------
+
+                        val embedVideos =
+                            extractVideoUrls(
+                                embedHtml
+                            )
+
+                        for (videoUrl in embedVideos) {
 
                             addVideoLink(
                                 videoUrl,
                                 "CloudCDN",
-                                play2,
+                                embedUrl,
+                                callback
+                            )
+
+                            found = true
+                        }
+
+                        // -------------------------------------
+                        // SD
+                        // -------------------------------------
+
+                        val embedSd =
+                            extractJsVariable(
+                                embedHtml,
+                                "link_video_sd"
+                            )
+
+                        if (!embedSd.isNullOrBlank()) {
+
+                            addVideoLink(
+                                embedSd,
+                                "CloudCDN SD",
+                                embedUrl,
+                                callback
+                            )
+
+                            found = true
+                        }
+
+                        // -------------------------------------
+                        // HD
+                        // -------------------------------------
+
+                        val embedHd =
+                            extractJsVariable(
+                                embedHtml,
+                                "link_video_hd"
+                            )
+
+                        if (!embedHd.isNullOrBlank()) {
+
+                            addVideoLink(
+                                embedHd,
+                                "CloudCDN HD",
+                                embedUrl,
                                 callback
                             )
 
@@ -1042,32 +830,129 @@ class Vn2cProvider : MainAPI() {
                         }
                     }
 
-                } catch (e: Exception) {
+                } catch (_: Exception) {
 
-                    println(
-                        "VN2DATA PLAY2 ERROR = ${e.message}"
-                    )
+                    // iframe lỗi -> thử iframe tiếp
                 }
             }
 
-            println(
-                "VN2DATA FOUND = $found"
-            )
+            // =================================================
+            // 7. TÌM PLAY.PHP TRỰC TIẾP
+            // =================================================
 
-            return found
+            val playRegex =
+                Regex(
+                    """https?://[^"'\s<>]+/(?:play|play2)\.php[^"'\s<>]*""",
+                    RegexOption.IGNORE_CASE
+                )
 
-        } catch (e: Exception) {
+            val playUrls =
+                playRegex
+                    .findAll(html)
+                    .map {
+                        it.value
+                            .replace(
+                                "&amp;",
+                                "&"
+                            )
+                    }
+                    .distinct()
+                    .toList()
 
-            println(
-                "VN2DATA ERROR = ${e.message}"
-            )
+            for (playUrl in playUrls) {
+
+                try {
+
+                    val playResponse =
+                        app.get(
+                            playUrl,
+                            headers = getHeaders(data)
+                        )
+
+                    val playHtml =
+                        playResponse.text
+
+                    // -----------------------------------------
+                    // SD
+                    // -----------------------------------------
+
+                    val sd =
+                        extractJsVariable(
+                            playHtml,
+                            "link_video_sd"
+                        )
+
+                    if (!sd.isNullOrBlank()) {
+
+                        addVideoLink(
+                            sd,
+                            "CloudCDN SD",
+                            playUrl,
+                            callback
+                        )
+
+                        found = true
+                    }
+
+                    // -----------------------------------------
+                    // HD
+                    // -----------------------------------------
+
+                    val hd =
+                        extractJsVariable(
+                            playHtml,
+                            "link_video_hd"
+                        )
+
+                    if (!hd.isNullOrBlank()) {
+
+                        addVideoLink(
+                            hd,
+                            "CloudCDN HD",
+                            playUrl,
+                            callback
+                        )
+
+                        found = true
+                    }
+
+                    // -----------------------------------------
+                    // MP4 / M3U8
+                    // -----------------------------------------
+
+                    val videos =
+                        extractVideoUrls(
+                            playHtml
+                        )
+
+                    for (videoUrl in videos) {
+
+                        addVideoLink(
+                            videoUrl,
+                            "CloudCDN",
+                            playUrl,
+                            callback
+                        )
+
+                        found = true
+                    }
+
+                } catch (_: Exception) {
+
+                    // bỏ qua
+                }
+            }
+
+        } catch (_: Exception) {
 
             return false
         }
+
+        return found
     }
 
     // =========================================================
-    // ADD EXTRACTOR LINK
+    // THÊM VIDEO LINK
     // =========================================================
 
     private suspend fun addVideoLink(
@@ -1081,37 +966,105 @@ class Vn2cProvider : MainAPI() {
             return
         }
 
-        println(
-            "VN2 ADD LINK = $url"
-        )
+        if (
+            !url.startsWith("http://") &&
+            !url.startsWith("https://")
+        ) {
+            return
+        }
 
-        callback.invoke(
-            newExtractorLink(
-                source = name,
-                name = serverName,
-                url = url
+        // -----------------------------------------------------
+        // QUALITY
+        // -----------------------------------------------------
+
+        val quality =
+            when {
+
+                serverName.contains(
+                    "1080",
+                    ignoreCase = true
+                ) -> 1080
+
+                serverName.contains(
+                    "FHD",
+                    ignoreCase = true
+                ) -> 1080
+
+                serverName.contains(
+                    "HD",
+                    ignoreCase = true
+                ) -> 720
+
+                serverName.contains(
+                    "SD",
+                    ignoreCase = true
+                ) -> 480
+
+                else -> 0
+            }
+
+        // -----------------------------------------------------
+        // TYPE
+        // -----------------------------------------------------
+
+        val linkType =
+            if (
+                url.contains(
+                    ".m3u8",
+                    ignoreCase = true
+                )
             ) {
 
-                this.referer = referer
+                ExtractorLinkType.M3U8
 
-                this.quality =
-                    Qualities.Unknown.value
+            } else {
+
+                ExtractorLinkType.VIDEO
             }
-        )
+
+        // -----------------------------------------------------
+        // CALLBACK
+        // -----------------------------------------------------
+
+        try {
+
+            callback(
+                newExtractorLink(
+                    name,
+                    serverName,
+                    url,
+                    linkType
+                ) {
+
+                    this.referer =
+                        referer
+
+                    this.quality =
+                        quality
+                }
+            )
+
+        } catch (_: Exception) {
+
+            // Không làm plugin crash
+        }
     }
 
     // =========================================================
-    // FIND JS VARIABLE
+    // ĐỌC:
+    //
+    // var link_video_sd = "https://....mp4";
+    //
     // =========================================================
 
-    private fun findVariable(
+    private fun extractJsVariable(
         html: String,
         variable: String
     ): String? {
 
         val regex =
             Regex(
-                """(?:var\s+|let\s+|const\s+)?$variable\s*=\s*["']([^"']*)["']""",
+                """(?:var\s+)?$variable\s*=\s*["']([^"']*)["']""",
                 RegexOption.IGNORE_CASE
             )
 
@@ -1122,47 +1075,40 @@ class Vn2cProvider : MainAPI() {
             return null
         }
 
-        var value =
-            match.groupValues[1].trim()
+        val value =
+            match
+                .groupValues
+                .getOrNull(1)
+                ?.trim()
 
-        if (value.isBlank()) {
+        if (value.isNullOrBlank()) {
             return null
         }
 
-        value =
-            value.replace(
-                "\\/",
-                "/"
-            )
-
-        value =
-            value.replace(
-                "&amp;",
-                "&"
-            )
-
-        if (value.startsWith("//")) {
-            value =
-                "https:$value"
+        if (
+            !value.startsWith("http://") &&
+            !value.startsWith("https://")
+        ) {
+            return null
         }
 
         return value
     }
 
     // =========================================================
-    // FIND MP4
+    // TÌM MP4 / M3U8
     // =========================================================
 
-    private fun findMp4Urls(
+    private fun extractVideoUrls(
         html: String
     ): List<String> {
 
-        val result =
-            LinkedHashSet<String>()
+        val results =
+            mutableListOf<String>()
 
         val regex =
             Regex(
-                """https?://[^"'\\\s<>]+\.mp4(?:\?[^"'\\\s<>]*)?""",
+                """https?://[^"'\s<>]+(?:\.mp4|\.m3u8)(?:\?[^"'\s<>]*)?""",
                 RegexOption.IGNORE_CASE
             )
 
@@ -1172,162 +1118,78 @@ class Vn2cProvider : MainAPI() {
                 match.value
 
             url =
-                url.replace(
-                    "\\/",
-                    "/"
-                )
+                url
+                    .replace(
+                        "\\/",
+                        "/"
+                    )
+                    .replace(
+                        "&amp;",
+                        "&"
+                    )
 
-            url =
-                url.replace(
-                    "&amp;",
-                    "&"
-                )
+            if (
+                url.startsWith("http://") ||
+                url.startsWith("https://")
+            ) {
 
-            result.add(url)
+                if (
+                    !url.endsWith(".js") &&
+                    !url.endsWith(".css")
+                ) {
+
+                    results.add(url)
+                }
+            }
         }
 
-        return result.toList()
-    }
+        // -----------------------------------------------------
+        // LINK BỊ ESCAPE TRONG JAVASCRIPT
+        // -----------------------------------------------------
 
-    // =========================================================
-    // FIND M3U8
-    // =========================================================
-
-    private fun findM3u8Urls(
-        html: String
-    ): List<String> {
-
-        val result =
-            LinkedHashSet<String>()
-
-        val regex =
+        val escapedRegex =
             Regex(
-                """https?://[^"'\\\s<>]+\.m3u8(?:\?[^"'\\\s<>]*)?""",
+                """https?:\\?/\\?/[^"'\s<>]+(?:\.mp4|\.m3u8)[^"'\s<>]*""",
                 RegexOption.IGNORE_CASE
             )
 
-        for (match in regex.findAll(html)) {
+        for (match in escapedRegex.findAll(html)) {
 
             var url =
                 match.value
 
             url =
-                url.replace(
-                    "\\/",
-                    "/"
-                )
+                url
+                    .replace(
+                        "\\/",
+                        "/"
+                    )
+                    .replace(
+                        "&amp;",
+                        "&"
+                    )
 
-            url =
-                url.replace(
-                    "&amp;",
-                    "&"
+            if (
+                url.contains(
+                    ".mp4",
+                    ignoreCase = true
+                ) ||
+                url.contains(
+                    ".m3u8",
+                    ignoreCase = true
                 )
+            ) {
 
-            result.add(url)
+                if (
+                    url.startsWith("http://") ||
+                    url.startsWith("https://")
+                ) {
+
+                    results.add(url)
+                }
+            }
         }
 
-        return result.toList()
-    }
-
-    // =========================================================
-    // EPISODE NAME
-    // =========================================================
-
-    private fun extractEpisodeName(
-        url: String
-    ): String {
-
-        val regex =
-            Regex(
-                """(?:tap[-_ ]?|episode[-_ ]?|ep[-_ ]?)(\d+)""",
-                RegexOption.IGNORE_CASE
-            )
-
-        val match =
-            regex.find(url)
-
-        if (match != null) {
-            return "Tập ${match.groupValues[1]}"
-        }
-
-        return "Tập"
-    }
-
-    // =========================================================
-    // SLUG
-    // =========================================================
-
-    private fun String.toSlug(): String {
-
-        var value =
-            trim().lowercase()
-
-        value =
-            value.replace(
-                Regex(
-                    "[áàảãạăắằẳẵặâấầẩẫậ]"
-                ),
-                "a"
-            )
-
-        value =
-            value.replace(
-                Regex(
-                    "[éèẻẽẹêếềểễệ]"
-                ),
-                "e"
-            )
-
-        value =
-            value.replace(
-                Regex(
-                    "[íìỉĩị]"
-                ),
-                "i"
-            )
-
-        value =
-            value.replace(
-                Regex(
-                    "[óòỏõọôốồổỗộơớờởỡợ]"
-                ),
-                "o"
-            )
-
-        value =
-            value.replace(
-                Regex(
-                    "[úùủũụưứừửữự]"
-                ),
-                "u"
-            )
-
-        value =
-            value.replace(
-                Regex(
-                    "[ýỳỷỹỵ]"
-                ),
-                "y"
-            )
-
-        value =
-            value.replace(
-                "đ",
-                "d"
-            )
-
-        value =
-            value.replace(
-                Regex("[^a-z0-9]+"),
-                "-"
-            )
-
-        value =
-            value.replace(
-                Regex("-+"),
-                "-"
-            )
-
-        return value.trim('-')
+        return results.distinct()
     }
 }
