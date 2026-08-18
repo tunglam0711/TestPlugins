@@ -21,7 +21,7 @@ class Vn2cProvider : MainAPI() {
     )
 
     // =========================================================
-    // CONFIG
+    // HEADER
     // =========================================================
 
     private val userAgent =
@@ -29,7 +29,7 @@ class Vn2cProvider : MainAPI() {
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/120.0.0.0 Mobile Safari/537.36"
 
-    private val headers = mapOf(
+    private val requestHeaders = mapOf(
         "User-Agent" to userAgent,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language" to "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -59,13 +59,9 @@ class Vn2cProvider : MainAPI() {
 
         try {
 
-            val url = request.data
-
-            println("VN2 MAIN URL = $url")
-
             val document = app.get(
-                url,
-                headers = headers,
+                request.data,
+                headers = requestHeaders,
                 referer = mainUrl
             ).document
 
@@ -77,26 +73,22 @@ class Vn2cProvider : MainAPI() {
 
             for (element in elements) {
 
-                val result = element.toSearchResult()
+                val result = parseSearchResult(element)
 
                 if (result != null) {
                     results.add(result)
                 }
             }
 
-            println(
-                "VN2 MAIN RESULTS = ${results.size}"
-            )
-
             return newHomePageResponse(
                 request.name,
-                results
+                results.distinctBy { it.url }
             )
 
         } catch (e: Exception) {
 
             println(
-                "VN2 MAIN ERROR = ${e.message}"
+                "VN2 MAIN ERROR: ${e.message}"
             )
 
             return newHomePageResponse(
@@ -120,23 +112,21 @@ class Vn2cProvider : MainAPI() {
 
         val slug = query.toSlug()
 
-        val url =
-            "$mainUrl/tim-kiem/$slug"
+        val url = "$mainUrl/tim-kiem/$slug"
 
         println(
-            "VN2 SEARCH = $url"
+            "VN2 SEARCH URL = $url"
         )
 
         try {
 
             val document = app.get(
                 url,
-                headers = headers,
+                headers = requestHeaders,
                 referer = mainUrl
             ).document
 
-            val results =
-                ArrayList<SearchResponse>()
+            val results = ArrayList<SearchResponse>()
 
             val elements = document.select(
                 "div.Form2, div.boxtk"
@@ -144,17 +134,12 @@ class Vn2cProvider : MainAPI() {
 
             for (element in elements) {
 
-                val result =
-                    element.toSearchResult()
+                val result = parseSearchResult(element)
 
                 if (result != null) {
                     results.add(result)
                 }
             }
-
-            println(
-                "VN2 SEARCH RESULTS = ${results.size}"
-            )
 
             return results.distinctBy {
                 it.url
@@ -163,7 +148,7 @@ class Vn2cProvider : MainAPI() {
         } catch (e: Exception) {
 
             println(
-                "VN2 SEARCH ERROR = ${e.message}"
+                "VN2 SEARCH ERROR: ${e.message}"
             )
 
             return emptyList()
@@ -174,24 +159,25 @@ class Vn2cProvider : MainAPI() {
     // SEARCH RESULT
     // =========================================================
 
-    private fun Element.toSearchResult(): SearchResponse? {
+    private fun parseSearchResult(
+        element: Element
+    ): SearchResponse? {
 
-        val linkElement =
-            selectFirst("a")
+        val linkElement = element.selectFirst("a")
 
         if (linkElement == null) {
             return null
         }
 
-        val href =
-            linkElement.attr("href").trim()
+        val href = linkElement
+            .attr("href")
+            .trim()
 
         if (href.isBlank()) {
             return null
         }
 
-        val url =
-            fixUrl(href)
+        val url = fixUrl(href)
 
         // -----------------------------------------------------
         // TITLE
@@ -200,21 +186,22 @@ class Vn2cProvider : MainAPI() {
         var title = ""
 
         val nameElement =
-            selectFirst("p.nametk a")
+            element.selectFirst("p.nametk a")
 
         if (nameElement != null) {
-            title =
-                nameElement.text().trim()
+            title = nameElement.text().trim()
         }
 
         if (title.isBlank()) {
-            title =
-                linkElement.attr("title").trim()
+            title = linkElement
+                .attr("title")
+                .trim()
         }
 
         if (title.isBlank()) {
-            title =
-                linkElement.text().trim()
+            title = linkElement
+                .text()
+                .trim()
         }
 
         if (title.isBlank()) {
@@ -227,35 +214,29 @@ class Vn2cProvider : MainAPI() {
 
         var poster: String? = null
 
-        val img =
-            selectFirst(
-                "img.c10, div.boxtk_img img, img"
-            )
+        val image = element.selectFirst(
+            "img.c10, div.boxtk_img img, img"
+        )
 
-        if (img != null) {
+        if (image != null) {
 
             var imageUrl =
-                img.attr("data-src").trim()
+                image.attr("data-src").trim()
 
             if (imageUrl.isBlank()) {
                 imageUrl =
-                    img.attr("data-original").trim()
+                    image.attr("data-original").trim()
             }
 
             if (imageUrl.isBlank()) {
                 imageUrl =
-                    img.attr("src").trim()
+                    image.attr("src").trim()
             }
 
             if (imageUrl.isNotBlank()) {
-                poster =
-                    fixUrl(imageUrl)
+                poster = fixUrl(imageUrl)
             }
         }
-
-        // -----------------------------------------------------
-        // RESPONSE
-        // -----------------------------------------------------
 
         return newMovieSearchResponse(
             title,
@@ -267,28 +248,26 @@ class Vn2cProvider : MainAPI() {
     }
 
     // =========================================================
-    // LOAD MOVIE
+    // LOAD
     // =========================================================
 
     override suspend fun load(
         url: String
     ): LoadResponse? {
 
-        println(
-            "VN2 LOAD = $url"
-        )
-
         try {
 
-            val response =
-                app.get(
-                    url,
-                    headers = headers,
-                    referer = mainUrl
-                )
+            println(
+                "VN2 LOAD = $url"
+            )
 
-            val document =
-                response.document
+            val response = app.get(
+                url,
+                headers = requestHeaders,
+                referer = mainUrl
+            )
+
+            val document = response.document
 
             // -------------------------------------------------
             // TITLE
@@ -300,20 +279,16 @@ class Vn2cProvider : MainAPI() {
                 document.selectFirst("h1")
 
             if (h1 != null) {
-                title =
-                    h1.text().trim()
+                title = h1.text().trim()
             }
 
             if (title.isBlank()) {
 
                 val boxTitle =
-                    document.selectFirst(
-                        ".box_film_title"
-                    )
+                    document.selectFirst(".box_film_title")
 
                 if (boxTitle != null) {
-                    title =
-                        boxTitle.text().trim()
+                    title = boxTitle.text().trim()
                 }
             }
 
@@ -323,8 +298,7 @@ class Vn2cProvider : MainAPI() {
                     document.selectFirst(".title")
 
                 if (titleElement != null) {
-                    title =
-                        titleElement.text().trim()
+                    title = titleElement.text().trim()
                 }
             }
 
@@ -338,50 +312,48 @@ class Vn2cProvider : MainAPI() {
 
             var poster: String? = null
 
-            val posterElement =
-                document.selectFirst(
-                    "img.c10, " +
-                            ".info-film img, " +
-                            ".box_film img, " +
-                            ".film-info img, " +
-                            "img.poster, " +
-                            "img.avatar"
-                )
+            val posterElement = document.selectFirst(
+                "img.c10, " +
+                        ".info-film img, " +
+                        ".box_film img, " +
+                        ".film-info img, " +
+                        "img.poster, " +
+                        "img.avatar"
+            )
 
             if (posterElement != null) {
 
-                var posterValue =
+                var value =
                     posterElement
                         .attr("data-src")
                         .trim()
 
-                if (posterValue.isBlank()) {
-                    posterValue =
+                if (value.isBlank()) {
+                    value =
                         posterElement
                             .attr("data-original")
                             .trim()
                 }
 
-                if (posterValue.isBlank()) {
-                    posterValue =
+                if (value.isBlank()) {
+                    value =
                         posterElement
                             .attr("src")
                             .trim()
                 }
 
-                if (posterValue.isNotBlank()) {
-                    poster =
-                        fixUrl(posterValue)
+                if (value.isNotBlank()) {
+                    poster = fixUrl(value)
                 }
             }
 
             // -------------------------------------------------
-            // PLOT
+            // DESCRIPTION
             // -------------------------------------------------
 
             var plot: String? = null
 
-            val plotElement =
+            val description =
                 document.selectFirst(
                     "div.wiew_info p, " +
                             "div.info-film, " +
@@ -389,13 +361,13 @@ class Vn2cProvider : MainAPI() {
                             ".desc"
                 )
 
-            if (plotElement != null) {
+            if (description != null) {
 
-                val plotValue =
-                    plotElement.text().trim()
+                val value =
+                    description.text().trim()
 
-                if (plotValue.isNotBlank()) {
-                    plot = plotValue
+                if (value.isNotBlank()) {
+                    plot = value
                 }
             }
 
@@ -433,7 +405,7 @@ class Vn2cProvider : MainAPI() {
                 if (episodeName.isBlank()) {
 
                     episodeName =
-                        getEpisodeName(
+                        extractEpisodeName(
                             episodeUrl
                         )
                 }
@@ -442,10 +414,7 @@ class Vn2cProvider : MainAPI() {
                     newEpisode(
                         episodeUrl
                     ) {
-                        name =
-                            episodeName.ifBlank {
-                                "Tập"
-                            }
+                        name = episodeName
                     }
                 )
             }
@@ -461,39 +430,31 @@ class Vn2cProvider : MainAPI() {
 
             if (uniqueEpisodes.isEmpty()) {
 
-                var playUrl: String? = null
+                var playUrl = ""
 
-                val playElement =
+                val playButton =
                     document.selectFirst(
                         "div.playphim a, " +
                                 "a.btn-play, " +
                                 ".play-btn a"
                     )
 
-                if (playElement != null) {
+                if (playButton != null) {
 
-                    val href =
-                        playElement
+                    playUrl =
+                        playButton
                             .attr("href")
                             .trim()
-
-                    if (href.isNotBlank()) {
-                        playUrl =
-                            fixUrl(href)
-                    }
                 }
 
-                val finalUrl =
-                    if (playUrl != null) {
-                        playUrl
-                    } else {
-                        url
-                    }
+                if (playUrl.isBlank()) {
+                    playUrl = url
+                } else {
+                    playUrl = fixUrl(playUrl)
+                }
 
-                val fullEpisode =
-                    newEpisode(
-                        finalUrl
-                    ) {
+                val episode =
+                    newEpisode(playUrl) {
                         name = "Full"
                     }
 
@@ -501,7 +462,7 @@ class Vn2cProvider : MainAPI() {
                     title,
                     url,
                     TvType.TvSeries,
-                    listOf(fullEpisode)
+                    listOf(episode)
                 ) {
                     posterUrl = poster
                     this.plot = plot
@@ -509,7 +470,7 @@ class Vn2cProvider : MainAPI() {
             }
 
             // -------------------------------------------------
-            // RETURN SERIES
+            // RETURN
             // -------------------------------------------------
 
             return newTvSeriesLoadResponse(
@@ -543,33 +504,33 @@ class Vn2cProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        println("================================")
-        println("VN2 LOAD LINKS")
-        println("DATA = $data")
-        println("================================")
+        println("====================================")
+        println("VN2 LOADLINK START")
+        println("VN2 EPISODE = $data")
+        println("====================================")
 
         try {
 
             // -------------------------------------------------
-            // 1. GET EPISODE PAGE
+            // STEP 1
+            // OPEN EPISODE
             // -------------------------------------------------
 
-            val episodeResponse =
-                app.get(
-                    data,
-                    headers = headers,
-                    referer = mainUrl
-                )
+            val response = app.get(
+                data,
+                headers = requestHeaders,
+                referer = mainUrl
+            )
 
-            val html =
-                episodeResponse.text
+            val html = response.text
 
             println(
-                "VN2 EPISODE HTML = ${html.length}"
+                "VN2 EPISODE HTML LENGTH = ${html.length}"
             )
 
             // -------------------------------------------------
-            // 2. DIRECT VIDEO FROM EPISODE
+            // STEP 2
+            // SEARCH DIRECT VIDEO
             // -------------------------------------------------
 
             var found = false
@@ -588,6 +549,10 @@ class Vn2cProvider : MainAPI() {
 
             if (!directSd.isNullOrBlank()) {
 
+                println(
+                    "VN2 DIRECT SD = $directSd"
+                )
+
                 addVideoLink(
                     directSd,
                     "CloudCDN SD",
@@ -603,6 +568,10 @@ class Vn2cProvider : MainAPI() {
                 directHd != directSd
             ) {
 
+                println(
+                    "VN2 DIRECT HD = $directHd"
+                )
+
                 addVideoLink(
                     directHd,
                     "CloudCDN HD",
@@ -616,19 +585,23 @@ class Vn2cProvider : MainAPI() {
             if (found) {
 
                 println(
-                    "VN2 DIRECT LINK FOUND"
+                    "VN2 FOUND DIRECT VIDEO"
                 )
 
                 return true
             }
 
             // -------------------------------------------------
-            // 3. FIND IFRAME
+            // STEP 3
+            // FIND IFRAME
             // -------------------------------------------------
 
             val iframeElements =
-                episodeResponse.document
-                    .select("iframe")
+                response.document.select("iframe")
+
+            println(
+                "VN2 IFRAME COUNT = ${iframeElements.size}"
+            )
 
             for (iframe in iframeElements) {
 
@@ -636,7 +609,6 @@ class Vn2cProvider : MainAPI() {
                     iframe.attr("src").trim()
 
                 if (iframeUrl.isBlank()) {
-
                     iframeUrl =
                         iframe
                             .attr("data-src")
@@ -662,7 +634,7 @@ class Vn2cProvider : MainAPI() {
                 )
 
                 // -------------------------------------------------
-                // 4. VN2DATA PLAY.PHP
+                // VN2DATA
                 // -------------------------------------------------
 
                 if (
@@ -676,7 +648,6 @@ class Vn2cProvider : MainAPI() {
                         loadVn2Data(
                             iframeUrl,
                             data,
-                            subtitleCallback,
                             callback
                         )
 
@@ -686,12 +657,33 @@ class Vn2cProvider : MainAPI() {
                 }
 
                 // -------------------------------------------------
-                // 5. OTHER EXTRACTOR
+                // PLAY.PHP
                 // -------------------------------------------------
 
                 else if (
-                    iframeUrl.startsWith("http")
+                    iframeUrl.contains(
+                        "play.php",
+                        ignoreCase = true
+                    )
                 ) {
+
+                    val result =
+                        loadVn2Data(
+                            iframeUrl,
+                            data,
+                            callback
+                        )
+
+                    if (result) {
+                        found = true
+                    }
+                }
+
+                // -------------------------------------------------
+                // OTHER IFRAME
+                // -------------------------------------------------
+
+                else {
 
                     try {
 
@@ -714,15 +706,20 @@ class Vn2cProvider : MainAPI() {
             }
 
             // -------------------------------------------------
-            // 6. HTML FALLBACK
+            // STEP 4
+            // SEARCH MP4 IN EPISODE HTML
             // -------------------------------------------------
 
             if (!found) {
 
-                val mp4 =
+                val mp4Urls =
                     findMp4Urls(html)
 
-                for (videoUrl in mp4) {
+                println(
+                    "VN2 EPISODE MP4 COUNT = ${mp4Urls.size}"
+                )
+
+                for (videoUrl in mp4Urls) {
 
                     addVideoLink(
                         videoUrl,
@@ -735,12 +732,21 @@ class Vn2cProvider : MainAPI() {
                 }
             }
 
+            // -------------------------------------------------
+            // STEP 5
+            // SEARCH M3U8
+            // -------------------------------------------------
+
             if (!found) {
 
-                val m3u8 =
+                val m3u8Urls =
                     findM3u8Urls(html)
 
-                for (videoUrl in m3u8) {
+                println(
+                    "VN2 EPISODE M3U8 COUNT = ${m3u8Urls.size}"
+                )
+
+                for (videoUrl in m3u8Urls) {
 
                     addVideoLink(
                         videoUrl,
@@ -772,25 +778,25 @@ class Vn2cProvider : MainAPI() {
     }
 
     // =========================================================
-    // LOAD VN2DATA
+    // VN2DATA
     // =========================================================
 
     private suspend fun loadVn2Data(
-        playUrl: String,
+        url: String,
         episodeUrl: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        println(
-            "VN2DATA URL = $playUrl"
-        )
+        println("------------------------------------")
+        println("VN2DATA REQUEST")
+        println(url)
+        println("------------------------------------")
 
         try {
 
             val response =
                 app.get(
-                    playUrl,
+                    url,
                     headers = mapOf(
                         "User-Agent" to userAgent,
                         "Accept" to "*/*",
@@ -803,11 +809,11 @@ class Vn2cProvider : MainAPI() {
                 response.text
 
             println(
-                "VN2DATA HTML = ${html.length}"
+                "VN2DATA HTML LENGTH = ${html.length}"
             )
 
             // -------------------------------------------------
-            // LINK VIDEO SD
+            // SD
             // -------------------------------------------------
 
             val sd =
@@ -817,7 +823,7 @@ class Vn2cProvider : MainAPI() {
                 )
 
             // -------------------------------------------------
-            // LINK VIDEO HD
+            // HD
             // -------------------------------------------------
 
             val hd =
@@ -827,10 +833,10 @@ class Vn2cProvider : MainAPI() {
                 )
 
             // -------------------------------------------------
-            // PHP CONTENT EMBED
+            // PLAY2
             // -------------------------------------------------
 
-            val phpEmbed =
+            val play2 =
                 findVariable(
                     html,
                     "php_content_embed"
@@ -845,13 +851,13 @@ class Vn2cProvider : MainAPI() {
             )
 
             println(
-                "VN2DATA EMBED = $phpEmbed"
+                "VN2DATA PLAY2 = $play2"
             )
 
             var found = false
 
             // -------------------------------------------------
-            // SD
+            // SD LINK
             // -------------------------------------------------
 
             if (!sd.isNullOrBlank()) {
@@ -859,7 +865,7 @@ class Vn2cProvider : MainAPI() {
                 addVideoLink(
                     sd,
                     "CloudCDN SD",
-                    playUrl,
+                    url,
                     callback
                 )
 
@@ -867,7 +873,7 @@ class Vn2cProvider : MainAPI() {
             }
 
             // -------------------------------------------------
-            // HD
+            // HD LINK
             // -------------------------------------------------
 
             if (
@@ -878,7 +884,7 @@ class Vn2cProvider : MainAPI() {
                 addVideoLink(
                     hd,
                     "CloudCDN HD",
-                    playUrl,
+                    url,
                     callback
                 )
 
@@ -886,24 +892,24 @@ class Vn2cProvider : MainAPI() {
             }
 
             // -------------------------------------------------
-            // MP4 FALLBACK
+            // MP4 SEARCH
             // -------------------------------------------------
 
             if (!found) {
 
-                val mp4s =
+                val mp4Urls =
                     findMp4Urls(html)
 
                 println(
-                    "VN2DATA MP4 COUNT = ${mp4s.size}"
+                    "VN2DATA MP4 COUNT = ${mp4Urls.size}"
                 )
 
-                for (url in mp4s) {
+                for (videoUrl in mp4Urls) {
 
                     addVideoLink(
-                        url,
+                        videoUrl,
                         "CloudCDN",
-                        playUrl,
+                        url,
                         callback
                     )
 
@@ -912,24 +918,24 @@ class Vn2cProvider : MainAPI() {
             }
 
             // -------------------------------------------------
-            // M3U8 FALLBACK
+            // M3U8 SEARCH
             // -------------------------------------------------
 
             if (!found) {
 
-                val m3u8s =
+                val m3u8Urls =
                     findM3u8Urls(html)
 
                 println(
-                    "VN2DATA M3U8 COUNT = ${m3u8s.size}"
+                    "VN2DATA M3U8 COUNT = ${m3u8Urls.size}"
                 )
 
-                for (url in m3u8s) {
+                for (videoUrl in m3u8Urls) {
 
                     addVideoLink(
-                        url,
+                        videoUrl,
                         "CloudCDN HLS",
-                        playUrl,
+                        url,
                         callback
                     )
 
@@ -943,8 +949,8 @@ class Vn2cProvider : MainAPI() {
 
             if (
                 !found &&
-                !phpEmbed.isNullOrBlank() &&
-                phpEmbed.startsWith("http")
+                !play2.isNullOrBlank() &&
+                play2.startsWith("http")
             ) {
 
                 println(
@@ -953,46 +959,50 @@ class Vn2cProvider : MainAPI() {
 
                 try {
 
-                    val play2Response =
+                    val response2 =
                         app.get(
-                            phpEmbed,
+                            play2,
                             headers = mapOf(
                                 "User-Agent" to userAgent,
                                 "Accept" to "*/*",
-                                "Referer" to playUrl
+                                "Referer" to url
                             ),
-                            referer = playUrl
+                            referer = url
                         )
 
-                    val play2Html =
-                        play2Response.text
+                    val html2 =
+                        response2.text
 
-                    val play2Sd =
+                    println(
+                        "VN2DATA PLAY2 HTML = ${html2.length}"
+                    )
+
+                    val sd2 =
                         findVariable(
-                            play2Html,
+                            html2,
                             "link_video_sd"
                         )
 
-                    val play2Hd =
+                    val hd2 =
                         findVariable(
-                            play2Html,
+                            html2,
                             "link_video_hd"
                         )
 
                     println(
-                        "VN2DATA PLAY2 SD = $play2Sd"
+                        "VN2DATA PLAY2 SD = $sd2"
                     )
 
                     println(
-                        "VN2DATA PLAY2 HD = $play2Hd"
+                        "VN2DATA PLAY2 HD = $hd2"
                     )
 
-                    if (!play2Sd.isNullOrBlank()) {
+                    if (!sd2.isNullOrBlank()) {
 
                         addVideoLink(
-                            play2Sd,
+                            sd2,
                             "CloudCDN SD",
-                            phpEmbed,
+                            play2,
                             callback
                         )
 
@@ -1000,14 +1010,14 @@ class Vn2cProvider : MainAPI() {
                     }
 
                     if (
-                        !play2Hd.isNullOrBlank() &&
-                        play2Hd != play2Sd
+                        !hd2.isNullOrBlank() &&
+                        hd2 != sd2
                     ) {
 
                         addVideoLink(
-                            play2Hd,
+                            hd2,
                             "CloudCDN HD",
-                            phpEmbed,
+                            play2,
                             callback
                         )
 
@@ -1016,17 +1026,15 @@ class Vn2cProvider : MainAPI() {
 
                     if (!found) {
 
-                        val play2Mp4 =
-                            findMp4Urls(
-                                play2Html
-                            )
+                        val mp4 =
+                            findMp4Urls(html2)
 
-                        for (url in play2Mp4) {
+                        for (videoUrl in mp4) {
 
                             addVideoLink(
-                                url,
+                                videoUrl,
                                 "CloudCDN",
-                                phpEmbed,
+                                play2,
                                 callback
                             )
 
@@ -1042,6 +1050,10 @@ class Vn2cProvider : MainAPI() {
                 }
             }
 
+            println(
+                "VN2DATA FOUND = $found"
+            )
+
             return found
 
         } catch (e: Exception) {
@@ -1055,18 +1067,8 @@ class Vn2cProvider : MainAPI() {
     }
 
     // =========================================================
-    // ADD VIDEO LINK
+    // ADD EXTRACTOR LINK
     // =========================================================
-
-    /*
-     * QUAN TRỌNG:
-     *
-     * Phải là suspend fun.
-     *
-     * Vì CloudStream SDK của project bạn báo:
-     *
-     * newExtractorLink(...) = suspend
-     */
 
     private suspend fun addVideoLink(
         url: String,
@@ -1080,7 +1082,7 @@ class Vn2cProvider : MainAPI() {
         }
 
         println(
-            "VN2 ADD LINK [$serverName] = $url"
+            "VN2 ADD LINK = $url"
         )
 
         callback.invoke(
@@ -1090,16 +1092,7 @@ class Vn2cProvider : MainAPI() {
                 url = url
             ) {
 
-                this.referer =
-                    referer
-
-                /*
-                 * Không dùng:
-                 *
-                 * Qualities.FHD
-                 *
-                 * vì SDK của bạn báo FHD không tồn tại.
-                 */
+                this.referer = referer
 
                 this.quality =
                     Qualities.Unknown.value
@@ -1116,12 +1109,9 @@ class Vn2cProvider : MainAPI() {
         variable: String
     ): String? {
 
-        val pattern =
-            """(?:var\s+|let\s+|const\s+)?$variable\s*=\s*["']([^"']*)["']"""
-
         val regex =
             Regex(
-                pattern,
+                """(?:var\s+|let\s+|const\s+)?$variable\s*=\s*["']([^"']*)["']""",
                 RegexOption.IGNORE_CASE
             )
 
@@ -1243,7 +1233,7 @@ class Vn2cProvider : MainAPI() {
     // EPISODE NAME
     // =========================================================
 
-    private fun getEpisodeName(
+    private fun extractEpisodeName(
         url: String
     ): String {
 
@@ -1257,83 +1247,87 @@ class Vn2cProvider : MainAPI() {
             regex.find(url)
 
         if (match != null) {
-
-            return "Tập " +
-                    match.groupValues[1]
+            return "Tập ${match.groupValues[1]}"
         }
 
         return "Tập"
     }
 
     // =========================================================
-    // VIETNAMESE SLUG
+    // SLUG
     // =========================================================
 
     private fun String.toSlug(): String {
 
-        var text =
+        var value =
             trim().lowercase()
 
-        text = text.replace(
-            Regex(
-                "[áàảãạăắằẳẵặâấầẩẫậ]"
-            ),
-            "a"
-        )
+        value =
+            value.replace(
+                Regex(
+                    "[áàảãạăắằẳẵặâấầẩẫậ]"
+                ),
+                "a"
+            )
 
-        text = text.replace(
-            Regex(
-                "[éèẻẽẹêếềểễệ]"
-            ),
-            "e"
-        )
+        value =
+            value.replace(
+                Regex(
+                    "[éèẻẽẹêếềểễệ]"
+                ),
+                "e"
+            )
 
-        text = text.replace(
-            Regex(
-                "[íìỉĩị]"
-            ),
-            "i"
-        )
+        value =
+            value.replace(
+                Regex(
+                    "[íìỉĩị]"
+                ),
+                "i"
+            )
 
-        text = text.replace(
-            Regex(
-                "[óòỏõọôốồổỗộơớờởỡợ]"
-            ),
-            "o"
-        )
+        value =
+            value.replace(
+                Regex(
+                    "[óòỏõọôốồổỗộơớờởỡợ]"
+                ),
+                "o"
+            )
 
-        text = text.replace(
-            Regex(
-                "[úùủũụưứừửữự]"
-            ),
-            "u"
-        )
+        value =
+            value.replace(
+                Regex(
+                    "[úùủũụưứừửữự]"
+                ),
+                "u"
+            )
 
-        text = text.replace(
-            Regex(
-                "[ýỳỷỹỵ]"
-            ),
-            "y"
-        )
+        value =
+            value.replace(
+                Regex(
+                    "[ýỳỷỹỵ]"
+                ),
+                "y"
+            )
 
-        text =
-            text.replace(
+        value =
+            value.replace(
                 "đ",
                 "d"
             )
 
-        text =
-            text.replace(
+        value =
+            value.replace(
                 Regex("[^a-z0-9]+"),
                 "-"
             )
 
-        text =
-            text.replace(
+        value =
+            value.replace(
                 Regex("-+"),
                 "-"
             )
 
-        return text.trim('-')
+        return value.trim('-')
     }
 }
