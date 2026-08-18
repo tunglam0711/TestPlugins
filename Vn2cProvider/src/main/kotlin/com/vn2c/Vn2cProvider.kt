@@ -284,21 +284,22 @@ class Vn2cProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        println("VN2 LOADLINK =================================")
-        println("VN2 DATA = $data")
-
         val episodeUrl = data.trim()
+
         if (episodeUrl.isBlank()) {
-            println("VN2 ERROR: empty episode URL")
-            return false
+            throw IllegalStateException("VN2 DEBUG\nSTEP=0\nDATA=EMPTY")
         }
 
         val foundLinks = mutableSetOf<String>()
-        var found = false
+        var playerCount = 0
+        var directCount = 0
+        var generatedCount = 0
+        val debugPlayers = mutableListOf<String>()
+        val debugVideos = mutableListOf<String>()
 
         suspend fun add(url: String, server: String, referer: String) {
             val clean = cleanUrl(url)
-            if (clean.isBlank()) return
+            if (!isVideoUrl(clean)) return
             if (!foundLinks.add(clean)) return
 
             addVideoLink(
@@ -307,31 +308,36 @@ class Vn2cProvider : MainAPI() {
                 referer = referer,
                 callback = callback
             )
-            found = true
-            println("VN2 LINK FOUND [$server] = $clean")
+
+            debugVideos.add("$server=$clean")
         }
 
         try {
-            /*
-             * Trường hợp data đã là play.php.
-             */
+            // ---------------------------------------------------------
+            // STEP 1: nếu data đã là play.php thì đọc thẳng player
+            // ---------------------------------------------------------
             if (episodeUrl.contains("/play/js_fix/", true)) {
                 val playerLinks = fetchPlayerLinks(
-                    episodeUrl,
-                    "Server 1",
-                    episodeUrl.substringBefore("/play/")
+                    playerUrl = episodeUrl,
+                    serverName = "Server 1",
+                    referer = episodeUrl.substringBefore("/play/")
                 )
+
+                playerCount++
+                debugPlayers.add(episodeUrl)
 
                 for (item in playerLinks) {
                     add(item.url, item.name, item.referer)
                 }
 
-                if (found) return true
+                if (foundLinks.isNotEmpty()) {
+                    return true
+                }
             }
 
-            /*
-             * Mở trang tập phim.
-             */
+            // ---------------------------------------------------------
+            // STEP 2: mở trang tập
+            // ---------------------------------------------------------
             val episodeResponse = app.get(
                 episodeUrl,
                 headers = headers(mainUrl)
@@ -339,29 +345,28 @@ class Vn2cProvider : MainAPI() {
 
             val html = episodeResponse.text
 
-            println("VN2 EPISODE HTML LENGTH = ${html.length}")
+            // ---------------------------------------------------------
+            // STEP 3: tìm play.php / play2.php
+            // ---------------------------------------------------------
+            val playerUrls = extractPlayerUrls(
+                html = html,
+                pageUrl = episodeUrl
+            )
 
-            /*
-             * Tìm tất cả play.php / play2.php trong HTML.
-             */
-            val playerUrls = extractPlayerUrls(html, episodeUrl)
+            playerCount = playerUrls.size
+            debugPlayers.addAll(playerUrls)
 
-            println("VN2 PLAYER URL COUNT = ${playerUrls.size}")
-
-            /*
-             * Nếu HTML có nhiều server thì mỗi play.php trở thành
-             * một server riêng.
-             */
             playerUrls.forEachIndexed { index, playerUrl ->
-                val serverName = when {
-                    playerUrl.contains("play2.php", true) -> "Server 2"
-                    else -> "Server ${index + 1}"
+                val serverName = if (playerUrl.contains("play2.php", true)) {
+                    "Server 2"
+                } else {
+                    "Server ${index + 1}"
                 }
 
                 val playerLinks = fetchPlayerLinks(
-                    playerUrl,
-                    serverName,
-                    episodeUrl
+                    playerUrl = playerUrl,
+                    serverName = serverName,
+                    referer = episodeUrl
                 )
 
                 for (item in playerLinks) {
@@ -369,40 +374,47 @@ class Vn2cProvider : MainAPI() {
                 }
             }
 
-            if (found) return true
+            if (foundLinks.isNotEmpty()) {
+                return true
+            }
 
-            /*
-             * Có trang không để play.php trong HTML mà để URL video
-             * trực tiếp trong JS.
-             */
+            // ---------------------------------------------------------
+            // STEP 4: fallback tìm MP4/M3U8 ngay trong trang tập
+            // ---------------------------------------------------------
             val directUrls = extractVideoUrls(html)
+            directCount = directUrls.size
 
             directUrls.forEachIndexed { index, videoUrl ->
                 add(
                     videoUrl,
-                    "Server ${index + 1}",
+                    "Direct Server ${index + 1}",
                     episodeUrl
                 )
             }
 
-            if (found) return true
+            if (foundLinks.isNotEmpty()) {
+                return true
+            }
 
-            /*
-             * Fallback: cố gắng đọc các biến JS của VN2 rồi dựng
-             * play.php theo đúng cấu trúc mà trang web đang dùng.
-             */
+            // ---------------------------------------------------------
+            // STEP 5: fallback dựng play.php từ HTML/JS VN2
+            // ---------------------------------------------------------
             val generatedPlayers = buildGeneratedPlayerUrls(
                 html = html,
                 episodeUrl = episodeUrl
             )
 
-            println("VN2 GENERATED PLAYER COUNT = ${generatedPlayers.size}")
+            generatedCount = generatedPlayers.size
 
             generatedPlayers.forEachIndexed { index, playerUrl ->
+                if (!debugPlayers.contains(playerUrl)) {
+                    debugPlayers.add(playerUrl)
+                }
+
                 val playerLinks = fetchPlayerLinks(
-                    playerUrl,
-                    "Server ${index + 1}",
-                    episodeUrl
+                    playerUrl = playerUrl,
+                    serverName = "Generated Server ${index + 1}",
+                    referer = episodeUrl
                 )
 
                 for (item in playerLinks) {
@@ -410,11 +422,49 @@ class Vn2cProvider : MainAPI() {
                 }
             }
 
-            println("VN2 FINAL_FOUND = $found")
-            return found
+            if (foundLinks.isNotEmpty()) {
+                return true
+            }
+
+            // ---------------------------------------------------------
+            // Không tìm thấy link -> THROW để Provider Test hiện log
+            // ---------------------------------------------------------
+            val playerInfo = if (debugPlayers.isEmpty()) {
+                "NONE"
+            } else {
+                debugPlayers.joinToString("\n")
+            }
+
+            val htmlPreview = html
+                .replace(Regex("\\s+"), " ")
+                .take(1000)
+
+            throw IllegalStateException(
+                "VN2 DEBUG\n" +
+                        "STEP=FINAL\n" +
+                        "URL=$episodeUrl\n" +
+                        "HTML=${html.length}\n" +
+                        "PLAYER_COUNT=$playerCount\n" +
+                        "DIRECT_COUNT=$directCount\n" +
+                        "GENERATED_COUNT=$generatedCount\n" +
+                        "FOUND=0\n" +
+                        "PLAYER_URLS=$playerInfo\n" +
+                        "HTML_PREVIEW=$htmlPreview"
+            )
+        } catch (e: IllegalStateException) {
+            throw e
         } catch (e: Exception) {
-            println("VN2 LOADLINK ERROR: ${e.message}")
-            return found
+            throw IllegalStateException(
+                "VN2 DEBUG\n" +
+                        "STEP=EXCEPTION\n" +
+                        "URL=$episodeUrl\n" +
+                        "ERROR=${e.javaClass.simpleName}: ${e.message ?: "unknown"}\n" +
+                        "PLAYER_COUNT=$playerCount\n" +
+                        "DIRECT_COUNT=$directCount\n" +
+                        "GENERATED_COUNT=$generatedCount\n" +
+                        "FOUND=${foundLinks.size}\n" +
+                        "VIDEOS=${debugVideos.joinToString(" | ")}"
+            )
         }
     }
 
